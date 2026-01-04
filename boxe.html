@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>TITAN BOXE V2.0 - BIO ENGINE</title>
+    <title>TITAN BOXE V3.0 - AUDIO ENGINE</title>
     
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose"></script>
@@ -21,7 +21,7 @@
         
         /* EFEITOS VISUAIS */
         .crit-shake { animation: shake 0.2s cubic-bezier(.36,.07,.19,.97) both; }
-        @keyframes shake { 10%, 90% { transform: translate3d(-2px, 0, 0); } 20%, 80% { transform: translate3d(4px, 0, 0); } }
+        @keyframes shake { 10%, 90% { transform: translate3d(-4px, 0, 0); } 20%, 80% { transform: translate3d(8px, 0, 0); } }
 
         /* HUD TÉCNICO */
         .hud-text { font-family: 'Fira Code', monospace; text-shadow: 0 0 20px var(--p-color); }
@@ -32,11 +32,23 @@
         #guard-alert { position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%); color: red; font-size: 1.5rem; font-weight: 900; display: none; z-index: 100; text-shadow: 0 0 10px red; text-align: center; }
         #form-alert { position: absolute; top: 60%; left: 50%; transform: translate(-50%, -50%); color: #00F0FF; font-size: 1.2rem; font-weight: 900; display: none; z-index: 100; text-shadow: 0 0 10px cyan; text-align: center; animation: pulse 0.5s infinite; }
         
-        /* TIMER */
+        /* OVERLAY DE INÍCIO (Para ativar o áudio) */
+        #start-overlay {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.9); z-index: 200;
+            display: flex; flex-col; align-items: center; justify-content: center;
+            cursor: pointer;
+        }
+        
         #timer-box { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); font-size: 1.5rem; font-weight: bold; z-index: 90; color: white; background: rgba(0,0,0,0.5); padding: 5px 15px; border-radius: 20px; border: 1px solid #333; }
     </style>
 </head>
 <body>
+
+    <div id="start-overlay" onclick="startGame()">
+        <i class="fas fa-play-circle text-6xl text-cyan-400 mb-4 animate-pulse"></i>
+        <h1 class="text-3xl font-black italic">CLIQUE PARA INICIAR</h1>
+        <p class="text-zinc-500 text-xs mt-2 uppercase tracking-widest">Ativando Titan Audio Engine</p>
+    </div>
 
     <div id="flash" class="fixed inset-0 pointer-events-none z-[100] opacity-0 transition-opacity duration-100 bg-white"></div>
     <div id="guard-alert">LEVANTE A GUARDA!</div>
@@ -78,22 +90,86 @@
             angles: { left: 0, right: 0 }
         };
 
+        // --- TITAN AUDIO ENGINE ---
+        const TitanAudio = {
+            ctx: null,
+            init: function() {
+                window.AudioContext = window.AudioContext || window.webkitAudioContext;
+                this.ctx = new AudioContext();
+            },
+            playTone: function(freq, type, duration, vol=0.1) {
+                if(!this.ctx) return;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = type;
+                osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
+                gain.gain.setValueAtTime(vol, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + duration);
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start();
+                osc.stop(this.ctx.currentTime + duration);
+            },
+            impact: function() { // Som de soco pesado
+                if(!this.ctx) return;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.frequency.setValueAtTime(150, this.ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.5);
+                gain.gain.setValueAtTime(0.3, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.5);
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start();
+                osc.stop(this.ctx.currentTime + 0.5);
+            },
+            score: function() { // Som de pontuação futurista
+                this.playTone(800, 'sine', 0.1, 0.05);
+                setTimeout(() => this.playTone(1200, 'sine', 0.2, 0.05), 100);
+            },
+            crit: function() { // Som de Crítico
+                this.impact();
+                this.playTone(200, 'sawtooth', 0.3, 0.1);
+            },
+            speak: function(text) { // Voz do Sistema
+                if('speechSynthesis' in window) {
+                    const msg = new SpeechSynthesisUtterance(text);
+                    msg.lang = 'en-US'; // Inglês soa mais "Tech"
+                    msg.pitch = 0.8; // Voz mais grossa
+                    msg.rate = 1.1; // Um pouco mais rápido
+                    window.speechSynthesis.speak(msg);
+                }
+            }
+        };
+
+        // INICIALIZAÇÃO CONTROLADA
+        function startGame() {
+            TitanAudio.init();
+            TitanAudio.speak("Titan System Online. Fight!");
+            document.getElementById('start-overlay').style.display = 'none';
+            
+            // Inicia Câmera
+            const camera = new Camera(video, { onFrame: async () => await pose.send({image: video}), width: 640, height: 480 });
+            camera.start().then(() => {
+                state.active = true;
+                spawnTarget();
+                startTimer();
+            });
+        }
+
         const pose = new Pose({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`});
         pose.setOptions({ modelComplexity: 1, smoothLandmarks: true, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6 });
         pose.onResults(onResults);
-
-        const camera = new Camera(video, { onFrame: async () => await pose.send({image: video}), width: 640, height: 480 });
-        camera.start().then(() => {
-            state.active = true;
-            spawnTarget();
-            startTimer();
-        });
 
         function startTimer() {
             const timerInterval = setInterval(() => {
                 if(!state.active) { clearInterval(timerInterval); return; }
                 state.timeLeft--;
                 document.getElementById('timer-box').innerText = state.timeLeft + 's';
+                
+                // Contagem regressiva de áudio
+                if(state.timeLeft <= 5 && state.timeLeft > 0) TitanAudio.playTone(400, 'square', 0.1);
+                
                 if(state.timeLeft <= 0) {
                     clearInterval(timerInterval);
                     endGame(state.score);
@@ -113,18 +189,11 @@
             setTimeout(spawnTarget, Math.max(800, 1500 - (state.score / 20)));
         }
 
-        // --- ENGENHARIA AVANÇADA: CÁLCULO DE ÂNGULOS ---
         function calculateAngle(a, b, c) {
-            // A=Ombro, B=Cotovelo, C=Punho
-            // Lei dos Cossenos para achar o ângulo em B
             const AB = Math.sqrt(Math.pow(b.x - a.x, 2) + Math.pow(b.y - a.y, 2));
             const BC = Math.sqrt(Math.pow(b.x - c.x, 2) + Math.pow(b.y - c.y, 2));
             const AC = Math.sqrt(Math.pow(c.x - a.x, 2) + Math.pow(c.y - a.y, 2));
-            
-            // Fórmula: arccos( (a² + b² - c²) / 2ab )
-            // Convertendo para graus
-            let angle = Math.acos((BC*BC + AB*AB - AC*AC) / (2*BC*AB)) * (180/Math.PI);
-            return angle;
+            return Math.acos((BC*BC + AB*AB - AC*AC) / (2*BC*AB)) * (180/Math.PI);
         }
 
         function onResults(res) {
@@ -142,16 +211,12 @@
 
             if (res.poseLandmarks) {
                 const lm = res.poseLandmarks;
-                
-                // Pontos para cálculo vetorial
                 const leftArm = { shoulder: lm[11], elbow: lm[13], wrist: lm[15] };
                 const rightArm = { shoulder: lm[12], elbow: lm[14], wrist: lm[16] };
 
-                // 1. Calcular Ângulos (Engenharia)
                 state.angles.left = calculateAngle(leftArm.shoulder, leftArm.elbow, leftArm.wrist);
                 state.angles.right = calculateAngle(rightArm.shoulder, rightArm.elbow, rightArm.wrist);
 
-                // Mostra ângulo na tela (Visual Tech)
                 drawAngleInfo(rightArm.elbow, state.angles.right);
                 drawAngleInfo(leftArm.elbow, state.angles.left);
 
@@ -168,16 +233,15 @@
             if(!angle) return;
             const x = (1 - elbow.x) * canvas.width;
             const y = elbow.y * canvas.height;
-            
             ctx.font = "bold 16px 'Fira Code'";
-            ctx.fillStyle = angle > 150 ? "#39FF14" : "white"; // Verde se esticado, branco se não
+            ctx.fillStyle = angle > 150 ? "#39FF14" : "white";
             ctx.fillText(Math.round(angle) + "°", x + 20, y);
         }
 
         function checkGuard(lw, rw, ls, rs) {
             const handsY = (lw.y + rw.y) / 2;
             const shoulderY = (ls.y + rs.y) / 2;
-            if (handsY > shoulderY + 0.3) { // Margem um pouco maior
+            if (handsY > shoulderY + 0.3) { 
                 state.guardTimer++;
                 if (state.guardTimer > 60) document.getElementById('guard-alert').style.display = 'block';
             } else {
@@ -197,33 +261,35 @@
 
             state.targets.forEach((t, i) => {
                 const hand = t.side === 'left' ? hands.left : hands.right;
-                const angle = t.side === 'left' ? state.angles.left : state.angles.right; // Pega o ângulo do braço correto
+                const angle = t.side === 'left' ? state.angles.left : state.angles.right; 
                 
                 const handX = (1 - hand.x) * canvas.width; 
                 const handY = hand.y * canvas.height;
                 const d = Math.hypot(handX - (t.x * canvas.width), handY - (t.y * canvas.height));
 
                 if (d < 120 && force > 15) {
-                    
-                    // --- VALIDAÇÃO BIOMÉTRICA ---
-                    // Só conta o soco se o ângulo for maior que 140 graus (braço quase esticado)
                     if (angle > 140) {
                         let points = 100;
                         if (force > 50) {
                             points = 300;
+                            // AUDIO EFEITO CRÍTICO
+                            TitanAudio.crit(); 
+                            
                             document.getElementById('game-container').classList.add('crit-shake');
                             setTimeout(()=>document.getElementById('game-container').classList.remove('crit-shake'), 200);
                             document.getElementById('flash').style.opacity = 0.5;
                             setTimeout(()=>document.getElementById('flash').style.opacity = 0, 100);
+                        } else {
+                            // AUDIO PONTUAÇÃO NORMAL
+                            TitanAudio.score();
                         }
+                        
                         state.score += points;
                         document.getElementById('last-angle').innerText = Math.round(angle) + "°";
                         document.getElementById('form-alert').style.display = 'none';
-                        
                         state.targets.splice(i, 1);
                         document.getElementById('score').innerText = state.score.toString().padStart(4, '0');
                     } else {
-                        // Feedback de erro de forma
                         document.getElementById('form-alert').style.display = 'block';
                         setTimeout(() => document.getElementById('form-alert').style.display = 'none', 500);
                     }
@@ -278,6 +344,7 @@
     <script>
         function endGame(score) {
             state.active = false;
+            TitanAudio.speak("Session Complete");
 
             const recordKey = 'titan_rec_boxe';
             const currentRecord = parseInt(localStorage.getItem(recordKey) || '0');
@@ -285,6 +352,7 @@
             if (score > currentRecord) {
                 localStorage.setItem(recordKey, score);
                 document.getElementById('final-score').innerHTML = score + "<br><span class='text-sm text-yellow-400 animate-pulse'>NOVO RECORDE!</span>";
+                setTimeout(() => TitanAudio.speak("New Record! Congratulations agent."), 1000);
             } else {
                 document.getElementById('final-score').innerText = score;
             }
