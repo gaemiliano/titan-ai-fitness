@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>TITAN HOOP MASTER</title>
+    <title>TITAN HOOP V2 - PHYSICS ENGINE</title>
     
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose"></script>
@@ -28,7 +28,7 @@
         .hoop-container {
             position: absolute; top: 15%; left: 50%; transform: translateX(-50%);
             width: 120px; height: 10px; z-index: 20;
-            transition: left 0.1s; /* Movimento suave se a cesta se mover */
+            transition: left 0.5s cubic-bezier(0.4, 0, 0.2, 1);
         }
         .backboard {
             position: absolute; top: -80px; left: -40px; width: 200px; height: 140px;
@@ -49,6 +49,13 @@
         /* HUD */
         .hud-top { position: absolute; top: 0; width: 100%; padding: 20px; display: flex; justify-content: space-between; z-index: 50; }
         .score-val { font-family: 'Fira Code', monospace; font-size: 3rem; color: var(--b-orange); text-shadow: 0 0 10px var(--b-orange); }
+
+        #arc-meter {
+            position: absolute; top: 100px; right: 20px; text-align: right;
+            font-family: 'Fira Code', monospace; z-index: 50;
+        }
+        .arc-val { font-size: 3rem; color: #fff; font-weight: 900; }
+        .arc-label { font-size: 0.8rem; color: var(--b-orange); letter-spacing: 0.1em; }
 
         .video-hidden { position: absolute; opacity: 0; pointer-events: none; }
         .game-canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 10; transform: scaleX(-1); }
@@ -71,7 +78,7 @@
         <div class="net"></div>
     </div>
 
-    <div id="guide-msg">SEGURE A BOLA PARA COMEÇAR</div>
+    <div id="guide-msg">SEGURE A BOLA (MÃO NO OMBRO)</div>
 
     <div class="hud-top">
         <div class="text-center">
@@ -82,6 +89,11 @@
             <p class="text-[10px] uppercase tracking-widest text-zinc-400">Arremessos</p>
             <h1 id="attempts" class="score-val text-white">0/10</h1>
         </div>
+    </div>
+
+    <div id="arc-meter">
+        <div class="arc-val" id="last-arc">0°</div>
+        <div class="arc-label">ÂNGULO DE SAÍDA</div>
     </div>
 
     <video id="webcam" class="video-hidden" playsinline webkit-playsinline muted autoplay></video>
@@ -97,9 +109,9 @@
             active: true,
             score: 0,
             attempts: 0,
-            ball: { x: 0.5, y: 0.8, r: 30, vx: 0, vy: 0, active: false, held: true }, // Ball state
-            hoop: { x: 0.5, y: 0.15, w: 0.15 }, // Hoop position relative (0-1)
-            lastWrist: { y: 0 },
+            ball: { x: 0.5, y: 0.8, r: 30, vx: 0, vy: 0, active: false, held: true }, 
+            hoop: { x: 0.5, y: 0.15, w: 0.15 }, 
+            lastWrist: { x:0, y: 0 },
             feedback: ""
         };
 
@@ -113,7 +125,6 @@
             canvas.width = window.innerWidth; canvas.height = window.innerHeight;
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             
-            // Desenha Avatar Fantasma
             ctx.save();
             ctx.scale(-1, 1);
             ctx.translate(-canvas.width, 0);
@@ -124,118 +135,139 @@
 
             if (res.poseLandmarks && state.active) {
                 const lm = res.poseLandmarks;
-                // Mão Direita (16=Pulso, 14=Cotovelo, 12=Ombro)
-                // Vamos usar a mão direita como principal por enquanto (ou a mais alta)
-                const rWrist = lm[16];
-                const lWrist = lm[15];
-                
-                // Escolhe a mão que está mais alta
+                // Detecta qual mão está mais alta (para permitir canhotos e destros)
+                const rWrist = lm[16]; const lWrist = lm[15];
                 const activeHand = rWrist.y < lWrist.y ? rWrist : lWrist; 
+                const elbow = rWrist.y < lWrist.y ? lm[14] : lm[13];
+                const shoulder = rWrist.y < lWrist.y ? lm[12] : lm[11];
 
-                processThrow(activeHand, lm);
+                processThrow(activeHand, elbow, shoulder);
+                drawArm(activeHand, elbow, shoulder);
             }
             
             if(state.active) updatePhysics();
             drawBall();
         }
 
-        function processThrow(hand, lm) {
-            // Se a bola está voando, ignora a mão
+        function processThrow(hand, elbow, shoulder) {
             if(state.ball.active && !state.ball.held) return;
 
-            // Se a bola está "na mão" (held)
             if(state.ball.held) {
-                // A bola segue a mão do jogador
-                // Correção de espelhamento: X invertido
+                // A bola segue a mão
                 state.ball.x = 1 - hand.x; 
                 state.ball.y = hand.y;
 
-                // DETECÇÃO DE ARREMESSO (Gesto de chicote para cima)
-                const velY = state.lastWrist.y - hand.y; // Positivo se subiu
-                const throwThreshold = 0.05; // Velocidade necessária
-
-                // Se moveu rápido pra cima E a mão está na metade superior da tela
-                if (velY > throwThreshold && hand.y < 0.6) {
-                    shoot(hand.x, velY);
+                // CÁLCULO VETORIAL DO ARREMESSO
+                // Delta (Diferença) entre frame atual e anterior
+                const dx = hand.x - state.lastWrist.x;
+                const dy = state.lastWrist.y - hand.y; // Y inverte (pra cima é positivo na física, negativo no canvas)
+                
+                const speed = Math.sqrt(dx*dx + dy*dy);
+                
+                // Gatilho: Velocidade alta E Mão acima do ombro
+                if (speed > 0.04 && hand.y < shoulder.y) {
+                    
+                    // CALCULA O ÂNGULO DE SAÍDA (Arco)
+                    // Math.atan2 retorna radianos. Convertemos para Graus.
+                    // O vetor visual é invertido no X por causa do espelho.
+                    // Vamos simplificar: Baseado na verticalidade (dy) vs horizontalidade (dx)
+                    let angle = Math.atan2(dy, Math.abs(dx)) * (180 / Math.PI);
+                    
+                    shoot(angle, speed, hand.x);
                 }
                 
                 document.getElementById('guide-msg').innerText = "ARREMESSE!";
             }
             
-            state.lastWrist = { y: hand.y };
+            state.lastWrist = { x: hand.x, y: hand.y };
         }
 
-        function shoot(handX, force) {
+        function shoot(angle, force, handX) {
             state.ball.held = false;
             state.ball.active = true;
             state.attempts++;
             document.getElementById('attempts').innerText = state.attempts + "/10";
             document.getElementById('guide-msg').innerText = "";
 
-            // CÁLCULO DE TRAJETÓRIA
-            // X: Depende de onde o jogador está em relação ao centro
-            // Se handX (normalizado) < 0.5 (direita da tela), vai pra esquerda
-            const errorX = (0.5 - handX) * 15; // Desvio lateral
+            // Feedback visual do ângulo
+            const displayAngle = Math.round(angle);
+            const arcMeter = document.getElementById('last-arc');
+            arcMeter.innerText = displayAngle + "°";
             
+            // Coloração do Feedback
+            if(displayAngle >= 45 && displayAngle <= 65) {
+                arcMeter.style.color = "#39FF14"; // Arco Perfeito (Verde)
+                state.feedback = "ARCO PERFEITO";
+            } else if (displayAngle < 45) {
+                arcMeter.style.color = "#FF0055"; // Muito tenso (Vermelho)
+                state.feedback = "MUITO RETO";
+            } else {
+                arcMeter.style.color = "yellow"; // Muito alto
+                state.feedback = "BALÃO";
+            }
+
+            // FÍSICA APLICADA
+            // O erro lateral depende da posição da mão em relação ao centro (0.5)
+            const errorX = (0.5 - handX) * 10; 
+            
+            // Velocidades
             state.ball.vx = errorX; 
-            state.ball.vy = -25 - (force * 100); // Força pra cima baseada na velocidade do braço
+            // A força vertical depende da velocidade do braço E do ângulo
+            // Se o ângulo for ruim, a bola bate no aro
+            state.ball.vy = -25 - (force * 150); 
             
-            // Som de arremesso
             playSound(300, 'triangle');
 
             if(state.attempts >= 10) setTimeout(() => endGame(state.score * 50), 4000);
         }
 
         function updatePhysics() {
-            // Mover a Cesta (Dificuldade Dinâmica)
-            // A cesta oscila levemente para a esquerda e direita
-            const time = Date.now() / 1000;
-            const hoopOffset = Math.sin(time) * 0.2; // Oscilação
-            state.hoop.x = 0.5 + (state.score > 3 ? hoopOffset : 0); // Só move depois de 3 pontos
-            
-            // Atualiza visual da cesta via CSS
-            hoopEl.style.left = (state.hoop.x * 100) + "%";
+            // Mover a Cesta (Dificuldade Progressiva)
+            if(state.score > 4) {
+                const time = Date.now() / 800;
+                state.hoop.x = 0.5 + (Math.sin(time) * 0.3); // Oscila
+                hoopEl.style.left = (state.hoop.x * 100) + "%";
+            }
 
             if (state.ball.active && !state.ball.held) {
-                // Física Simples
                 state.ball.x += state.ball.vx / 100;
                 state.ball.y += state.ball.vy / 100;
-                state.ball.vy += 0.8; // Gravidade
+                state.ball.vy += 0.9; // Gravidade
                 
-                // Efeito de Profundidade (bola diminui)
                 if (state.ball.r > 15) state.ball.r -= 0.3;
 
-                // COLISÃO COM A CESTA
-                // A cesta está em Y=0.15 (aprox)
-                // A bola precisa estar descendo (vy > 0)
+                // COLISÃO
                 if (state.ball.y > 0.15 && state.ball.y < 0.25 && state.ball.vy > 0) {
                     const dist = Math.abs(state.ball.x - state.hoop.x);
                     
-                    if (dist < 0.08) { // Entrou!
-                        state.score += 2; // Cesta de 2 pontos
-                        if(Math.abs(dist) < 0.02) {
-                            state.score += 1; // SWISH! (Perfeito) +1 ponto extra
-                            state.feedback = "SWISH!";
+                    if (dist < 0.08) { 
+                        // SÓ ENTRA SE O ÂNGULO NÃO FOR "MUITO RETO"
+                        // Se o feedback foi "MUITO RETO", a bola bate e sai (simulação de física)
+                        if(state.feedback === "MUITO RETO") {
+                            state.ball.vy = -10; // Rebote pra cima
+                            state.ball.vx = (Math.random()-0.5)*20; // Rebote aleatório
+                            state.feedback = "ARO!";
+                            playSound(100, 'square'); // Som de ferro
                         } else {
-                            state.feedback = "CESTA!";
+                            // CESTA!
+                            let pts = 2;
+                            if(state.feedback === "ARCO PERFEITO") { pts = 3; state.feedback = "CHUÁÁ! (3pts)"; }
+                            else { state.feedback = "CESTA (2pts)"; }
+                            
+                            state.score += pts;
+                            document.getElementById('score').innerText = state.score;
+                            playSound(600, 'sine');
+                            resetBall();
                         }
-                        document.getElementById('score').innerText = state.score;
-                        playSound(600, 'sine');
-                        resetBall();
                     }
                 }
 
-                // Caiu no chão (Reset)
-                if (state.ball.y > 1.2) {
-                    state.feedback = "AIRBALL...";
-                    resetBall();
-                }
+                if (state.ball.y > 1.2) resetBall();
             }
         }
 
         function resetBall() {
             state.ball.active = false;
-            // Delay para pegar a bola de novo
             setTimeout(() => {
                 if(state.attempts < 10) {
                     state.ball.held = true;
@@ -247,30 +279,32 @@
 
         function drawBall() {
             if(!state.active) return;
-            
             const bx = state.ball.x * canvas.width;
             const by = state.ball.y * canvas.height;
             
             ctx.shadowBlur = 15; ctx.shadowColor = "orange";
             ctx.fillStyle = "#FF8800";
+            ctx.beginPath(); ctx.arc(bx, by, state.ball.r, 0, Math.PI*2); ctx.fill();
             
-            // Desenha a bola
-            ctx.beginPath();
-            ctx.arc(bx, by, state.ball.r, 0, Math.PI*2);
-            ctx.fill();
-            
-            // Linhas da bola de basquete
+            // Linhas da bola
             ctx.strokeStyle = "#333"; ctx.lineWidth = 2;
             ctx.beginPath(); ctx.moveTo(bx - state.ball.r, by); ctx.lineTo(bx + state.ball.r, by); ctx.stroke();
-            ctx.beginPath(); ctx.moveTo(bx, by - state.ball.r); ctx.lineTo(bx, by + state.ball.r); ctx.stroke();
 
-            // Feedback Texto
             if(state.feedback) {
-                ctx.font = "900 50px 'Inter'";
+                ctx.font = "900 40px 'Inter'";
                 ctx.fillStyle = "white";
                 ctx.textAlign = "center";
                 ctx.fillText(state.feedback, canvas.width/2, canvas.height/2);
             }
+        }
+
+        function drawArm(hand, elbow, shoulder) {
+            ctx.strokeStyle = "rgba(255, 136, 0, 0.5)"; ctx.lineWidth = 4;
+            ctx.beginPath();
+            ctx.moveTo((1-shoulder.x)*canvas.width, shoulder.y*canvas.height);
+            ctx.lineTo((1-elbow.x)*canvas.width, elbow.y*canvas.height);
+            ctx.lineTo((1-hand.x)*canvas.width, hand.y*canvas.height);
+            ctx.stroke();
         }
 
         function playSound(freq, type) {
@@ -286,22 +320,15 @@
     </script>
 
     <div id="game-over-modal" class="fixed inset-0 z-[200] bg-black/95 hidden flex-col items-center justify-center backdrop-blur-xl">
-        <div class="text-center animate-bounce mb-6"><i class="fas fa-trophy text-6xl text-yellow-400"></i></div>
-        <h2 class="text-5xl font-black italic text-white mb-2 uppercase">Partida <span style="color: #FF8800;">Encerrada</span></h2>
-        <div class="grid grid-cols-2 gap-8 my-8 w-full max-w-md">
-            <div class="bg-zinc-900 p-6 rounded-2xl border border-white/10 text-center">
-                <p class="text-[10px] uppercase text-zinc-500 tracking-widest">Score Final</p>
-                <h3 id="final-score" class="text-4xl font-black text-white">0000</h3>
-            </div>
-            <div class="bg-zinc-900 p-6 rounded-2xl border border-white/10 text-center relative overflow-hidden">
-                <div class="absolute inset-0 bg-yellow-500/10 animate-pulse"></div>
-                <p class="text-[10px] uppercase text-yellow-500 tracking-widest font-bold">XP Ganho</p>
-                <h3 id="final-xp" class="text-4xl font-black text-yellow-400">+0</h3>
-            </div>
+        <h2 class="text-5xl font-black italic text-white mb-2 uppercase">FIM DE <span style="color: #FF8800;">JOGO</span></h2>
+        <div class="bg-zinc-900 p-8 rounded-2xl border border-white/10 text-center mb-8">
+            <p class="text-[10px] uppercase text-zinc-500 tracking-widest">Score Final</p>
+            <h3 id="final-score" class="text-6xl font-black text-white">0000</h3>
+            <p id="final-xp" class="text-sm text-orange-400 mt-2 font-bold">+0 XP</p>
         </div>
         <div class="flex gap-4">
-            <button onclick="location.reload()" class="px-8 py-4 bg-zinc-800 text-white font-bold rounded-xl hover:bg-zinc-700 transition uppercase text-xs tracking-widest">Jogar Novamente</button>
-            <button onclick="window.location.href='index.html'" class="px-8 py-4 text-black font-black rounded-xl hover:scale-105 transition uppercase text-xs tracking-widest" style="background-color: #FF8800;">Voltar ao Menu</button>
+            <button onclick="location.reload()" class="px-8 py-4 bg-zinc-800 text-white font-bold rounded-xl uppercase tracking-widest">Jogar Novamente</button>
+            <button onclick="window.location.href='index.html'" class="px-8 py-4 bg-orange-500 text-black font-black rounded-xl uppercase tracking-widest">Voltar ao Menu</button>
         </div>
     </div>
 
@@ -309,33 +336,23 @@
         function endGame(score) {
             state.active = false;
             
-            // 1. DEFINE A CHAVE ÚNICA DESTE JOGO
-            const recordKey = 'titan_rec_basket'; // <--- IMPORTANTE: Mude isso em cada arquivo!
-            
-            // 2. RECUPERA O RECORDE ANTIGO
+            // SALVA RECORDE (BASKET)
+            const recordKey = 'titan_rec_basket';
             const currentRecord = parseInt(localStorage.getItem(recordKey) || '0');
             
-            // 3. MOSTRA O PLACAR INICIAL
-            document.getElementById('final-score').innerText = score;
-
-            // 4. VERIFICA SE É RECORDE
             if (score > currentRecord) {
-                // Salva no navegador
                 localStorage.setItem(recordKey, score);
-                
-                // Adiciona a mensagem visual de "NOVO RECORDE"
                 document.getElementById('final-score').innerHTML = score + "<br><span class='text-sm text-yellow-400 animate-pulse'>NOVO RECORDE!</span>";
+            } else {
+                document.getElementById('final-score').innerText = score;
             }
 
-            // 5. CALCULA XP (Lógica específica do Basquete: XP em dobro)
-            // Lembre-se: No Boxe é /10, no Penalty é /5, aqui é *2. Mantenha a lógica de cada jogo.
             let currentXp = parseInt(localStorage.getItem('titan_xp') || '0');
-            let earnedXp = Math.floor(score * 2); 
+            let earnedXp = Math.floor(score * 2);
             localStorage.setItem('titan_xp', currentXp + earnedXp);
-
-            document.getElementById('final-xp').innerText = "+" + earnedXp + " XP";
             
-            // 6. ABRE A JANELA
+            document.getElementById('final-xp').innerText = "+" + earnedXp + " XP";
+
             const modal = document.getElementById('game-over-modal');
             modal.classList.remove('hidden');
             modal.classList.add('flex');
