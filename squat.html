@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>TITAN SQUAT DEFENSE</title>
+    <title>TITAN SQUAT PRO - BIO ENGINE</title>
     
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose"></script>
@@ -27,7 +27,7 @@
         }
         @keyframes moveTunnel { from { background-position: 0 0; } to { background-position: 0 1000px; } }
 
-        /* BARREIRA (OBSTÁCULO) */
+        /* BARREIRA */
         .barrier {
             position: absolute; top: -100px; left: 0; width: 100%; height: 60px;
             background: rgba(217, 70, 239, 0.8);
@@ -39,15 +39,21 @@
         /* HUD */
         .hud-top { position: absolute; top: 0; width: 100%; padding: 20px; display: flex; justify-content: space-between; z-index: 50; }
         .score-val { font-family: 'Fira Code', monospace; font-size: 3rem; color: var(--neon-purple); text-shadow: 0 0 10px var(--neon-purple); }
+        .angle-val { font-family: 'Fira Code', monospace; font-size: 2rem; color: white; }
 
         .video-hidden { position: absolute; opacity: 0; pointer-events: none; }
         .game-canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 10; transform: scaleX(-1); }
 
-        /* MENSAGEM DE CALIBRAÇÃO */
         #status-msg {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
             font-size: 2rem; font-weight: 900; color: white; text-align: center;
             text-shadow: 0 0 20px var(--neon-purple); z-index: 100;
+        }
+        
+        #depth-warning {
+            position: absolute; bottom: 30%; left: 50%; transform: translateX(-50%);
+            color: #FF0055; font-weight: 900; font-size: 1.5rem; display: none; z-index: 90;
+            text-shadow: 0 0 10px red; animation: pulse 0.2s infinite;
         }
     </style>
 </head>
@@ -56,13 +62,20 @@
     <div class="tunnel" id="tunnel-bg"></div>
     <div class="barrier" id="obstacle"></div>
 
-    <div id="status-msg">FIQUE EM PÉ<br>CALIBRANDO...</div>
+    <div id="status-msg">FIQUE EM PÉ<br>PARA INICIAR</div>
+    <div id="depth-warning">DESÇA MAIS!</div>
 
     <div class="hud-top">
         <div class="text-center">
             <p class="text-[10px] uppercase tracking-widest text-zinc-400">Score</p>
             <h1 id="score" class="score-val">0</h1>
         </div>
+        
+        <div class="text-center">
+            <p class="text-[10px] uppercase tracking-widest text-zinc-400">Joelho</p>
+            <h1 id="knee-angle" class="angle-val">180°</h1>
+        </div>
+
         <div class="text-center">
             <p class="text-[10px] uppercase tracking-widest text-zinc-400">Vida</p>
             <div class="flex gap-2 mt-2" id="lives">
@@ -87,10 +100,9 @@
             calibrating: true,
             score: 0,
             lives: 3,
-            standingY: 0, // Altura do ombro em pé
             isSquatting: false,
+            currentAngle: 180,
             obstacle: { y: -100, active: false, speed: 5 },
-            feedback: ""
         };
 
         const pose = new Pose({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`});
@@ -100,9 +112,17 @@
         const camera = new Camera(video, { onFrame: async () => await pose.send({image: video}), width: 640, height: 480 });
         camera.start();
 
-        // CALIBRAÇÃO INICIAL (3 Segundos)
+        // CÁLCULO VETORIAL (Mesma lógica do boxe, aplicada à perna)
+        function calculateAngle(a, b, c) {
+            // A=Quadril, B=Joelho, C=Tornozelo
+            const AB = Math.sqrt(Math.pow(b.x - a.x, 2) + Math.pow(b.y - a.y, 2));
+            const BC = Math.sqrt(Math.pow(b.x - c.x, 2) + Math.pow(b.y - c.y, 2));
+            const AC = Math.sqrt(Math.pow(c.x - a.x, 2) + Math.pow(c.y - a.y, 2));
+            let angle = Math.acos((BC*BC + AB*AB - AC*AC) / (2*BC*AB)) * (180/Math.PI);
+            return angle;
+        }
+
         let calibrationFrames = 0;
-        let calibrationSum = 0;
 
         function onResults(res) {
             canvas.width = window.innerWidth; canvas.height = window.innerHeight;
@@ -111,20 +131,48 @@
             ctx.save();
             ctx.scale(-1, 1);
             ctx.translate(-canvas.width, 0);
-            ctx.globalAlpha = 0.4;
             ctx.drawImage(res.image, 0, 0, canvas.width, canvas.height);
             ctx.restore();
-            ctx.globalAlpha = 1.0;
+            
+            // Filtro roxo para ambiente cyberpunk
+            ctx.fillStyle = "rgba(20, 0, 20, 0.3)";
+            ctx.fillRect(0,0,canvas.width, canvas.height);
 
             if (res.poseLandmarks) {
                 const lm = res.poseLandmarks;
-                // Usamos a média dos ombros (11 e 12) como referência de altura
-                const shoulderY = (lm[11].y + lm[12].y) / 2;
-
+                
+                // Pontos da Perna Direita (24=Quadril, 26=Joelho, 28=Tornozelo)
+                // Ou Esquerda (23, 25, 27) -> Vamos pegar a média ou o mais visível
+                const rLeg = { hip: lm[24], knee: lm[26], ankle: lm[28] };
+                const lLeg = { hip: lm[23], knee: lm[25], ankle: lm[27] };
+                
+                // Calcula ângulos
+                const rAngle = calculateAngle(rLeg.hip, rLeg.knee, rLeg.ankle);
+                const lAngle = calculateAngle(lLeg.hip, lLeg.knee, lLeg.ankle);
+                
+                // Usa o menor ângulo (quem está agachando mais)
+                state.currentAngle = Math.min(rAngle, lAngle);
+                
+                // Atualiza HUD
+                const hudAngle = document.getElementById('knee-angle');
+                hudAngle.innerText = Math.round(state.currentAngle) + "°";
+                
+                // Visualização no Canvas (Desenha o ângulo no joelho)
+                drawTechVisuals(rLeg.knee, rAngle);
+                
                 if (state.calibrating) {
-                    processCalibration(shoulderY);
+                    // Espera o usuário ficar em pé (ângulo > 160) por um tempo
+                    if(state.currentAngle > 160) calibrationFrames++;
+                    else calibrationFrames = 0;
+
+                    if(calibrationFrames > 60) {
+                        state.calibrating = false;
+                        state.active = true;
+                        document.getElementById('status-msg').innerText = "";
+                        spawnObstacle();
+                    }
                 } else if (state.active) {
-                    processGame(shoulderY);
+                    processGame();
                 }
                 
                 drawSkeleton(lm);
@@ -133,31 +181,34 @@
             if(state.active) updateObstacle();
         }
 
-        function processCalibration(y) {
-            calibrationSum += y;
-            calibrationFrames++;
+        function drawTechVisuals(knee, angle) {
+            const x = (1 - knee.x) * canvas.width;
+            const y = knee.y * canvas.height;
             
-            if (calibrationFrames > 60) { // ~2-3 segundos
-                state.standingY = calibrationSum / calibrationFrames;
-                state.calibrating = false;
-                state.active = true;
-                document.getElementById('status-msg').innerText = "";
-                spawnObstacle();
-                playSound(600, 'sine'); // Start sound
-            }
+            ctx.beginPath();
+            ctx.arc(x, y, 40, 0, Math.PI * 2);
+            ctx.strokeStyle = angle < 110 ? "#39FF14" : "#D946EF"; // Verde se agachou bem
+            ctx.lineWidth = 4;
+            ctx.stroke();
+            
+            ctx.fillStyle = "white";
+            ctx.font = "bold 14px Arial";
+            ctx.fillText(Math.round(angle) + "°", x + 50, y);
         }
 
-        function processGame(currentY) {
-            // Se a altura atual for maior (mais baixo na tela) que a altura em pé + margem
-            // OY é invertido: 0 é topo, 1 é base. Então agachar aumenta o Y.
-            const squatThreshold = state.standingY + 0.15; 
-            
-            if (currentY > squatThreshold) {
+        function processGame() {
+            // BIOMETRIA AVANÇADA:
+            // Agachamento válido é abaixo de 110 graus (quanto menor, mais agachado)
+            if (state.currentAngle < 110) {
                 state.isSquatting = true;
-                ctx.fillStyle = "#39FF14"; // Verde = Seguro
-                ctx.fillText("AGACHADO", 50, 50);
+                ctx.fillStyle = "#39FF14"; 
+                ctx.font = "900 40px 'Inter'";
+                ctx.fillText("SAFE", 50, 100);
+                document.getElementById('knee-angle').style.color = "#39FF14";
+                document.getElementById('depth-warning').style.display = 'none';
             } else {
                 state.isSquatting = false;
+                document.getElementById('knee-angle').style.color = "white";
             }
         }
 
@@ -165,53 +216,50 @@
             if(!state.active) return;
             state.obstacle.active = true;
             state.obstacle.y = -100;
-            state.obstacle.speed = 10 + (state.score * 0.5); // Acelera com o tempo
+            state.obstacle.speed = 8 + (state.score * 0.05); // Acelera suavemente
             obstacle.style.display = 'block';
         }
 
         function updateObstacle() {
             if (!state.obstacle.active) return;
 
-            // Move obstáculo para baixo (perspectiva 2D simulando 3D vindo na direção)
             state.obstacle.y += state.obstacle.speed;
             
-            // Atualiza visual
-            // Simula "Crescimento" (chegando perto)
+            // Efeito visual de profundidade
             const progress = state.obstacle.y / window.innerHeight;
             const scale = 0.5 + (progress * 0.5); 
             obstacle.style.top = state.obstacle.y + 'px';
             obstacle.style.transform = `scale(${scale})`;
 
-            // COLISÃO (Momento Crítico)
-            // A barreira "bate" quando chega perto do fim da tela (ex: 70% da altura)
-            if (state.obstacle.y > window.innerHeight * 0.6 && state.obstacle.y < window.innerHeight * 0.8) {
+            // MOMENTO DA COLISÃO (Janela de Dano)
+            if (state.obstacle.y > window.innerHeight * 0.6 && state.obstacle.y < window.innerHeight * 0.85) {
                 if (!state.isSquatting) {
+                    // Se estiver "quase" agachando (entre 110 e 130), avisa para descer mais
+                    if(state.currentAngle < 140) {
+                        document.getElementById('depth-warning').style.display = 'block';
+                    }
                     hitPlayer();
                 }
             }
 
-            // Passou da tela
             if (state.obstacle.y > window.innerHeight) {
-                // Sucesso
-                if(state.lives > 0) { // Só pontua se estiver vivo
+                if(state.lives > 0) { 
                     state.score += 100;
                     document.getElementById('score').innerText = state.score;
                     state.obstacle.active = false;
-                    setTimeout(spawnObstacle, 1000); // Próximo obstáculo
+                    setTimeout(spawnObstacle, 1000); 
                 }
             }
         }
 
         function hitPlayer() {
-            // Evita hit múltiplo no mesmo obstáculo
             if(state.obstacle.active) {
                 state.lives--;
                 updateLives();
-                playSound(150, 'sawtooth'); // Som de dano
                 document.body.style.backgroundColor = "red";
                 setTimeout(() => document.body.style.backgroundColor = "#050505", 100);
                 
-                state.obstacle.active = false; // Remove obstáculo
+                state.obstacle.active = false;
                 obstacle.style.display = 'none';
 
                 if (state.lives <= 0) {
@@ -231,28 +279,15 @@
         }
 
         function drawSkeleton(lm) {
-            ctx.strokeStyle = state.isSquatting ? "#39FF14" : "white"; 
-            ctx.lineWidth = 4;
+            ctx.strokeStyle = "rgba(255,255,255,0.3)"; ctx.lineWidth = 2;
             const connect = (a, b) => {
                 ctx.beginPath();
                 ctx.moveTo((1 - lm[a].x) * canvas.width, lm[a].y * canvas.height);
                 ctx.lineTo((1 - lm[b].x) * canvas.width, lm[b].y * canvas.height);
                 ctx.stroke();
             };
-            connect(11, 12); // Ombros
-            connect(23, 24); // Quadril
-            connect(11, 23); connect(12, 24); // Tronco
-        }
-
-        function playSound(freq, type) {
-            const aud = new AudioContext();
-            const osc = aud.createOscillator();
-            const gain = aud.createGain();
-            osc.type = type; osc.frequency.value = freq;
-            osc.connect(gain); gain.connect(aud.destination);
-            osc.start(); 
-            gain.gain.exponentialRampToValueAtTime(0.00001, aud.currentTime + 0.1);
-            osc.stop(aud.currentTime + 0.1);
+            connect(23, 25); connect(25, 27); // Perna Esq
+            connect(24, 26); connect(26, 28); // Perna Dir
         }
     </script>
 
@@ -261,7 +296,7 @@
         <div class="bg-zinc-900 p-8 rounded-2xl border border-white/10 text-center mb-8">
             <p class="text-[10px] uppercase text-zinc-500 tracking-widest">Score Final</p>
             <h3 id="final-score" class="text-6xl font-black text-white">0000</h3>
-            <p class="text-sm text-purple-400 mt-2 font-bold">+ XP CALCULADO</p>
+            <p id="final-xp" class="text-sm text-purple-400 mt-2 font-bold">+0 XP</p>
         </div>
         <div class="flex gap-4">
             <button onclick="location.reload()" class="px-8 py-4 bg-zinc-800 text-white font-bold rounded-xl uppercase tracking-widest">Tentar Novamente</button>
@@ -272,12 +307,24 @@
     <script>
         function endGame(score) {
             state.active = false;
-            document.getElementById('final-score').innerText = score;
-            // Salva XP no localStorage
+            
+            // SALVA RECORDE (SQUAT)
+            const recordKey = 'titan_rec_squat';
+            const currentRecord = parseInt(localStorage.getItem(recordKey) || '0');
+            
+            if (score > currentRecord) {
+                localStorage.setItem(recordKey, score);
+                document.getElementById('final-score').innerHTML = score + "<br><span class='text-sm text-yellow-400 animate-pulse'>NOVO RECORDE!</span>";
+            } else {
+                document.getElementById('final-score').innerText = score;
+            }
+
             let currentXp = parseInt(localStorage.getItem('titan_xp') || '0');
-            let earnedXp = Math.floor(score / 5); // 500 pts = 100 XP
+            let earnedXp = Math.floor(score / 5);
             localStorage.setItem('titan_xp', currentXp + earnedXp);
             
+            document.getElementById('final-xp').innerText = "+" + earnedXp + " XP";
+
             const modal = document.getElementById('game-over-modal');
             modal.classList.remove('hidden');
             modal.classList.add('flex');
