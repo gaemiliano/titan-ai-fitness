@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>TITAN BOXE V3.0 - AUDIO ENGINE</title>
+    <title>TITAN BOXE SUPREME - FULL ENGINE</title>
     
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose"></script>
@@ -19,6 +19,14 @@
         .game-canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 10; transform: scaleX(-1); }
         .video-hidden { position: absolute; opacity: 0; pointer-events: none; }
         
+        /* FILTRO CRT DE ÚLTIMA GERAÇÃO */
+        .crt-overlay {
+            position: fixed; inset: 0; z-index: 50; pointer-events: none;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.15) 50%), 
+                        linear-gradient(90deg, rgba(255, 0, 0, 0.02), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.02));
+            background-size: 100% 3px, 3px 100%;
+        }
+
         /* EFEITOS VISUAIS */
         .crit-shake { animation: shake 0.2s cubic-bezier(.36,.07,.19,.97) both; }
         @keyframes shake { 10%, 90% { transform: translate3d(-4px, 0, 0); } 20%, 80% { transform: translate3d(8px, 0, 0); } }
@@ -32,10 +40,9 @@
         #guard-alert { position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%); color: red; font-size: 1.5rem; font-weight: 900; display: none; z-index: 100; text-shadow: 0 0 10px red; text-align: center; }
         #form-alert { position: absolute; top: 60%; left: 50%; transform: translate(-50%, -50%); color: #00F0FF; font-size: 1.2rem; font-weight: 900; display: none; z-index: 100; text-shadow: 0 0 10px cyan; text-align: center; animation: pulse 0.5s infinite; }
         
-        /* OVERLAY DE INÍCIO (Para ativar o áudio) */
         #start-overlay {
             position: fixed; inset: 0; background: rgba(0,0,0,0.9); z-index: 200;
-            display: flex; flex-col; align-items: center; justify-content: center;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
             cursor: pointer;
         }
         
@@ -44,10 +51,12 @@
 </head>
 <body>
 
+    <div class="crt-overlay"></div>
+
     <div id="start-overlay" onclick="startGame()">
         <i class="fas fa-play-circle text-6xl text-cyan-400 mb-4 animate-pulse"></i>
-        <h1 class="text-3xl font-black italic">CLIQUE PARA INICIAR</h1>
-        <p class="text-zinc-500 text-xs mt-2 uppercase tracking-widest">Ativando Titan Audio Engine</p>
+        <h1 class="text-3xl font-black italic">AUTHENTICATE SYSTEM</h1>
+        <p class="text-zinc-500 text-xs mt-2 uppercase tracking-widest text-center">Iniciando Biometria Avançada e Áudio Engine</p>
     </div>
 
     <div id="flash" class="fixed inset-0 pointer-events-none z-[100] opacity-0 transition-opacity duration-100 bg-white"></div>
@@ -84,13 +93,41 @@
             active: false,
             score: 0,
             targets: [],
+            particles: [], // ENGINE DE PARTÍCULAS
             lastHands: { left: {x:0, y:0}, right: {x:0, y:0} },
             guardTimer: 0,
             timeLeft: 60,
             angles: { left: 0, right: 0 }
         };
 
-        // --- TITAN AUDIO ENGINE ---
+        // --- SISTEMA DE PARTÍCULAS (DESIGN DE ALTO NÍVEL) ---
+        class Particle {
+            constructor(x, y, color) {
+                this.x = x; this.y = y; this.color = color;
+                this.size = Math.random() * 4 + 2;
+                this.speedX = (Math.random() - 0.5) * 12;
+                this.speedY = (Math.random() - 0.5) * 12;
+                this.alpha = 1;
+            }
+            update() {
+                this.x += this.speedX; this.y += this.speedY;
+                this.alpha -= 0.025;
+            }
+            draw() {
+                ctx.globalAlpha = this.alpha;
+                ctx.fillStyle = this.color;
+                ctx.shadowBlur = 10; ctx.shadowColor = this.color;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.shadowBlur = 0;
+            }
+        }
+
+        // --- INTERPOLAÇÃO LERP (SUAVIZAÇÃO) ---
+        let smoothLandmarks = null;
+        const lerp = (a, b, f) => a + (b - a) * f;
+
         const TitanAudio = {
             ctx: null,
             init: function() {
@@ -110,7 +147,7 @@
                 osc.start();
                 osc.stop(this.ctx.currentTime + duration);
             },
-            impact: function() { // Som de soco pesado
+            impact: function() {
                 if(!this.ctx) return;
                 const osc = this.ctx.createOscillator();
                 const gain = this.ctx.createGain();
@@ -123,32 +160,27 @@
                 osc.start();
                 osc.stop(this.ctx.currentTime + 0.5);
             },
-            score: function() { // Som de pontuação futurista
+            score: function() {
                 this.playTone(800, 'sine', 0.1, 0.05);
                 setTimeout(() => this.playTone(1200, 'sine', 0.2, 0.05), 100);
             },
-            crit: function() { // Som de Crítico
+            crit: function() {
                 this.impact();
                 this.playTone(200, 'sawtooth', 0.3, 0.1);
             },
-            speak: function(text) { // Voz do Sistema
+            speak: function(text) {
                 if('speechSynthesis' in window) {
                     const msg = new SpeechSynthesisUtterance(text);
-                    msg.lang = 'en-US'; // Inglês soa mais "Tech"
-                    msg.pitch = 0.8; // Voz mais grossa
-                    msg.rate = 1.1; // Um pouco mais rápido
+                    msg.lang = 'en-US'; msg.pitch = 0.8; msg.rate = 1.1;
                     window.speechSynthesis.speak(msg);
                 }
             }
         };
 
-        // INICIALIZAÇÃO CONTROLADA
         function startGame() {
             TitanAudio.init();
             TitanAudio.speak("Titan System Online. Fight!");
             document.getElementById('start-overlay').style.display = 'none';
-            
-            // Inicia Câmera
             const camera = new Camera(video, { onFrame: async () => await pose.send({image: video}), width: 640, height: 480 });
             camera.start().then(() => {
                 state.active = true;
@@ -166,10 +198,7 @@
                 if(!state.active) { clearInterval(timerInterval); return; }
                 state.timeLeft--;
                 document.getElementById('timer-box').innerText = state.timeLeft + 's';
-                
-                // Contagem regressiva de áudio
                 if(state.timeLeft <= 5 && state.timeLeft > 0) TitanAudio.playTone(400, 'square', 0.1);
-                
                 if(state.timeLeft <= 0) {
                     clearInterval(timerInterval);
                     endGame(state.score);
@@ -183,8 +212,7 @@
             state.targets.push({
                 x: side === 'left' ? 0.25 : 0.75,
                 y: 0.3 + (Math.random() * 0.3),
-                r: 10, maxR: 90, side, life: 1.0,
-                color: side === 'left' ? '#00F0FF' : '#FFD700'
+                r: 10, maxR: 90, side, color: side === 'left' ? '#00F0FF' : '#FFD700'
             });
             setTimeout(spawnTarget, Math.max(800, 1500 - (state.score / 20)));
         }
@@ -198,63 +226,73 @@
 
         function onResults(res) {
             canvas.width = window.innerWidth; canvas.height = window.innerHeight;
-            ctx.clearRect(0,0,canvas.width, canvas.height);
+            
+            // DESIGN SUPREME: Efeito de Rastro (Ghosting)
+            ctx.fillStyle = "rgba(0,0,0,0.2)";
+            ctx.fillRect(0,0,canvas.width, canvas.height);
             
             ctx.save();
             ctx.scale(-1, 1);
             ctx.translate(-canvas.width, 0);
+            ctx.globalAlpha = 0.5; // Vídeo semi-transparente para focar no neon
             ctx.drawImage(res.image, 0, 0, canvas.width, canvas.height);
             ctx.restore();
-            
-            ctx.fillStyle = "rgba(0,0,0,0.4)";
-            ctx.fillRect(0,0,canvas.width, canvas.height);
 
             if (res.poseLandmarks) {
-                const lm = res.poseLandmarks;
+                // APLICAÇÃO DE LERP PARA MOVIMENTAÇÃO FLUÍDA
+                if (!smoothLandmarks) smoothLandmarks = res.poseLandmarks;
+                else {
+                    smoothLandmarks = res.poseLandmarks.map((lm, i) => ({
+                        x: lerp(smoothLandmarks[i].x, lm.x, 0.25),
+                        y: lerp(smoothLandmarks[i].y, lm.y, 0.25),
+                        visibility: lm.visibility
+                    }));
+                }
+
+                const lm = smoothLandmarks;
                 const leftArm = { shoulder: lm[11], elbow: lm[13], wrist: lm[15] };
                 const rightArm = { shoulder: lm[12], elbow: lm[14], wrist: lm[16] };
 
                 state.angles.left = calculateAngle(leftArm.shoulder, leftArm.elbow, leftArm.wrist);
                 state.angles.right = calculateAngle(rightArm.shoulder, rightArm.elbow, rightArm.wrist);
 
-                drawAngleInfo(rightArm.elbow, state.angles.right);
-                drawAngleInfo(leftArm.elbow, state.angles.left);
-
                 if(state.active) {
                     checkGuard(leftArm.wrist, rightArm.wrist, leftArm.shoulder, rightArm.shoulder);
                     processPhysics(leftArm.wrist, rightArm.wrist);
                 }
-                drawSkeleton(lm);
+                drawSupremeSkeleton(lm);
             }
+
+            // ATUALIZA E DESENHA PARTÍCULAS
+            state.particles.forEach((p, i) => {
+                p.update(); p.draw();
+                if(p.alpha <= 0) state.particles.splice(i, 1);
+            });
+
             renderTargets();
+            ctx.globalAlpha = 1.0;
         }
 
-        function drawAngleInfo(elbow, angle) {
-            if(!angle) return;
-            const x = (1 - elbow.x) * canvas.width;
-            const y = elbow.y * canvas.height;
-            ctx.font = "bold 16px 'Fira Code'";
-            ctx.fillStyle = angle > 150 ? "#39FF14" : "white";
-            ctx.fillText(Math.round(angle) + "°", x + 20, y);
+        function drawSupremeSkeleton(lm) {
+            ctx.lineWidth = 4;
+            ctx.shadowBlur = 15;
+            const connect = (a, b, color) => {
+                const p1 = lm[a]; const p2 = lm[b];
+                ctx.beginPath();
+                ctx.strokeStyle = color; ctx.shadowColor = color;
+                ctx.moveTo((1 - p1.x) * canvas.width, p1.y * canvas.height);
+                ctx.lineTo((1 - p2.x) * canvas.width, p2.y * canvas.height);
+                ctx.stroke();
+            };
+            connect(11, 13, "#00F0FF"); connect(13, 15, "#00F0FF"); 
+            connect(12, 14, "#FFD700"); connect(14, 16, "#FFD700"); 
+            ctx.shadowBlur = 0;
         }
 
-        function checkGuard(lw, rw, ls, rs) {
-            const handsY = (lw.y + rw.y) / 2;
-            const shoulderY = (ls.y + rs.y) / 2;
-            if (handsY > shoulderY + 0.3) { 
-                state.guardTimer++;
-                if (state.guardTimer > 60) document.getElementById('guard-alert').style.display = 'block';
-            } else {
-                state.guardTimer = 0;
-                document.getElementById('guard-alert').style.display = 'none';
-            }
-        }
-
-        function processPhysics(leftHand, rightHand) {
-            const hands = { left: leftHand, right: rightHand };
+        function processPhysics(lw, rw) {
+            const hands = { left: lw, right: rw };
             const velLeft = Math.hypot(hands.left.x - state.lastHands.left.x, hands.left.y - state.lastHands.left.y);
             const velRight = Math.hypot(hands.right.x - state.lastHands.right.x, hands.right.y - state.lastHands.right.y);
-            
             const maxVel = Math.max(velLeft, velRight);
             const force = Math.min(maxVel * 1000, 100);
             document.getElementById('power-meter').style.width = force + "%";
@@ -262,31 +300,26 @@
             state.targets.forEach((t, i) => {
                 const hand = t.side === 'left' ? hands.left : hands.right;
                 const angle = t.side === 'left' ? state.angles.left : state.angles.right; 
-                
-                const handX = (1 - hand.x) * canvas.width; 
-                const handY = hand.y * canvas.height;
-                const d = Math.hypot(handX - (t.x * canvas.width), handY - (t.y * canvas.height));
+                const hX = (1 - hand.x) * canvas.width; 
+                const hY = hand.y * canvas.height;
+                const d = Math.hypot(hX - (t.x * canvas.width), hY - (t.y * canvas.height));
 
                 if (d < 120 && force > 15) {
                     if (angle > 140) {
                         let points = 100;
                         if (force > 50) {
-                            points = 300;
-                            // AUDIO EFEITO CRÍTICO
-                            TitanAudio.crit(); 
-                            
+                            points = 300; TitanAudio.crit();
                             document.getElementById('game-container').classList.add('crit-shake');
                             setTimeout(()=>document.getElementById('game-container').classList.remove('crit-shake'), 200);
                             document.getElementById('flash').style.opacity = 0.5;
                             setTimeout(()=>document.getElementById('flash').style.opacity = 0, 100);
-                        } else {
-                            // AUDIO PONTUAÇÃO NORMAL
-                            TitanAudio.score();
-                        }
+                        } else { TitanAudio.score(); }
                         
+                        // EXPLOSÃO DE PARTÍCULAS NO IMPACTO
+                        for(let j=0; j<15; j++) state.particles.push(new Particle(t.x * canvas.width, t.y * canvas.height, t.color));
+
                         state.score += points;
                         document.getElementById('last-angle').innerText = Math.round(angle) + "°";
-                        document.getElementById('form-alert').style.display = 'none';
                         state.targets.splice(i, 1);
                         document.getElementById('score').innerText = state.score.toString().padStart(4, '0');
                     } else {
@@ -301,70 +334,42 @@
         function renderTargets() {
             state.targets.forEach(t => {
                 t.r += (t.maxR - t.r) * 0.1;
+                ctx.shadowBlur = 20; ctx.shadowColor = t.color;
+                ctx.strokeStyle = t.color; ctx.lineWidth = 6;
                 ctx.beginPath();
                 ctx.arc(t.x * canvas.width, t.y * canvas.height, t.r, 0, Math.PI * 2);
-                ctx.strokeStyle = t.color; ctx.lineWidth = 5; ctx.stroke();
-            });
-        }
-
-        function drawSkeleton(lm) {
-            ctx.strokeStyle = "rgba(255,255,255,0.8)"; ctx.lineWidth = 4;
-            const connect = (a, b) => {
-                const p1 = lm[a]; const p2 = lm[b];
-                ctx.beginPath();
-                ctx.moveTo((1 - p1.x) * canvas.width, p1.y * canvas.height);
-                ctx.lineTo((1 - p2.x) * canvas.width, p2.y * canvas.height);
                 ctx.stroke();
-            };
-            connect(11, 13); connect(13, 15); 
-            connect(12, 14); connect(14, 16); 
+            });
+            ctx.shadowBlur = 0;
         }
-    </script>
 
-    <div id="game-over-modal" class="fixed inset-0 z-[200] bg-black/95 hidden flex-col items-center justify-center backdrop-blur-xl">
-        <div class="text-center animate-bounce mb-6"><i class="fas fa-trophy text-6xl text-yellow-400"></i></div>
-        <h2 class="text-5xl font-black italic text-white mb-2 uppercase">Sessão <span style="color: #FFD700;">Finalizada</span></h2>
-        <div class="grid grid-cols-2 gap-8 my-8 w-full max-w-md">
-            <div class="bg-zinc-900 p-6 rounded-2xl border border-white/10 text-center">
-                <p class="text-[10px] uppercase text-zinc-500 tracking-widest">Score Final</p>
-                <h3 id="final-score" class="text-4xl font-black text-white">0000</h3>
-            </div>
-            <div class="bg-zinc-900 p-6 rounded-2xl border border-white/10 text-center relative overflow-hidden">
-                <div class="absolute inset-0 bg-yellow-500/10 animate-pulse"></div>
-                <p class="text-[10px] uppercase text-yellow-500 tracking-widest font-bold">XP Ganho</p>
-                <h3 id="final-xp" class="text-4xl font-black text-yellow-400">+0</h3>
-            </div>
-        </div>
-        <div class="flex gap-4">
-            <button onclick="location.reload()" class="px-8 py-4 bg-zinc-800 text-white font-bold rounded-xl hover:bg-zinc-700 transition uppercase text-xs tracking-widest">Jogar Novamente</button>
-            <button onclick="window.location.href='index.html'" class="px-8 py-4 text-black font-black rounded-xl hover:scale-105 transition uppercase text-xs tracking-widest" style="background-color: #FFD700;">Voltar ao Menu</button>
-        </div>
-    </div>
+        function checkGuard(lw, rw, ls, rs) {
+            const handsY = (lw.y + rw.y) / 2;
+            const shoulderY = (ls.y + rs.y) / 2;
+            if (handsY > shoulderY + 0.3) { 
+                state.guardTimer++;
+                if (state.guardTimer > 60) document.getElementById('guard-alert').style.display = 'block';
+            } else {
+                state.guardTimer = 0;
+                document.getElementById('guard-alert').style.display = 'none';
+            }
+        }
 
-    <script>
         function endGame(score) {
             state.active = false;
             TitanAudio.speak("Session Complete");
-
             const recordKey = 'titan_rec_boxe';
             const currentRecord = parseInt(localStorage.getItem(recordKey) || '0');
-            
             if (score > currentRecord) {
                 localStorage.setItem(recordKey, score);
                 document.getElementById('final-score').innerHTML = score + "<br><span class='text-sm text-yellow-400 animate-pulse'>NOVO RECORDE!</span>";
                 setTimeout(() => TitanAudio.speak("New Record! Congratulations agent."), 1000);
-            } else {
-                document.getElementById('final-score').innerText = score;
-            }
-
-            let currentXp = parseInt(localStorage.getItem('titan_xp') || '0');
-            let earnedXp = Math.floor(score / 10);
-            localStorage.setItem('titan_xp', currentXp + earnedXp);
-
-            document.getElementById('final-xp').innerText = "+" + earnedXp + " XP";
-            const modal = document.getElementById('game-over-modal');
-            modal.classList.remove('hidden');
-            modal.classList.add('flex');
+            } else { document.getElementById('final-score').innerText = score; }
+            let xp = parseInt(localStorage.getItem('titan_xp') || '0');
+            localStorage.setItem('titan_xp', xp + Math.floor(score / 10));
+            document.getElementById('final-xp').innerText = "+" + Math.floor(score / 10) + " XP";
+            document.getElementById('game-over-modal').classList.remove('hidden');
+            document.getElementById('game-over-modal').classList.add('flex');
         }
     </script>
 </body>
