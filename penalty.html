@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>TITAN PENALTY AI - FINAL</title>
+    <title>TITAN PENALTY V2 - SPEED RADAR</title>
     
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose"></script>
@@ -16,6 +16,7 @@
         :root { --neon-green: #39FF14; --neon-red: #FF0055; }
         body { background: #050505; color: white; font-family: 'Inter', sans-serif; overflow: hidden; height: 100dvh; margin: 0; }
         
+        /* CAMPO DIGITAL */
         .field-grid {
             position: absolute; bottom: 0; width: 100%; height: 50%;
             background: linear-gradient(180deg, rgba(0,255,0,0.1) 0%, rgba(0,0,0,1) 100%);
@@ -31,16 +32,21 @@
         }
         
         .hud-top { position: absolute; top: 0; width: 100%; padding: 20px; display: flex; justify-content: space-between; z-index: 50; }
-        .score-box { text-align: center; }
         .score-val { font-family: 'Fira Code', monospace; font-size: 3rem; color: var(--neon-green); text-shadow: 0 0 10px var(--neon-green); }
         
+        #speed-radar {
+            position: absolute; top: 100px; right: 20px; text-align: right;
+            font-family: 'Fira Code', monospace; z-index: 50;
+        }
+        .kmh-text { font-size: 4rem; color: #fff; font-weight: 900; font-style: italic; text-shadow: 0 0 10px white; }
+        .kmh-label { font-size: 1rem; color: var(--neon-green); letter-spacing: 0.2em; }
+
         #cam-alert {
             position: absolute; bottom: 20%; width: 100%; text-align: center;
             color: yellow; font-weight: bold; font-size: 1.2rem;
             animation: pulse 1s infinite; display: none; z-index: 60;
             text-shadow: 0 0 5px black;
         }
-        @keyframes pulse { 0% { opacity: 0.5; } 50% { opacity: 1; } 100% { opacity: 0.5; } }
 
         .video-hidden { position: absolute; opacity: 0; pointer-events: none; }
         .game-canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 10; transform: scaleX(-1); }
@@ -63,6 +69,11 @@
         </div>
     </div>
 
+    <div id="speed-radar">
+        <div class="kmh-text" id="last-speed">0</div>
+        <div class="kmh-label">KM/H</div>
+    </div>
+
     <video id="webcam" class="video-hidden" playsinline webkit-playsinline muted autoplay></video>
     <canvas id="gameCanvas" class="game-canvas"></canvas>
 
@@ -72,12 +83,12 @@
         const video = document.getElementById('webcam');
 
         let state = {
-            active: true, // Jogo começa ativo
+            active: true,
             score: 0,
             attempts: 0,
             ball: { x: 0.5, y: 0.8, radius: 20, active: false, velocity: {x:0, y:0} },
-            goalkeeper: { x: 0.5, y: 0.3, width: 0.15, height: 0.2, dir: 1 },
-            lastAnkles: { left: {y:0}, right: {y:0} },
+            goalkeeper: { x: 0.5, y: 0.3, width: 0.15, height: 0.2, dir: 1, speed: 0.02 },
+            lastAnkles: { left: {x:0, y:0}, right: {x:0, y:0} },
             kickCooldown: false,
             feedback: ""
         };
@@ -88,18 +99,27 @@
 
         new Camera(video, { onFrame: async () => await pose.send({image: video}), width: 640, height: 480 }).start();
 
+        function calculateSpeed(p1, p2) {
+            // Distância Euclidiana entre frame atual e anterior
+            const dist = Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
+            // Fator multiplicador para simular Km/h (Ajuste fino)
+            return Math.round(dist * 2000); 
+        }
+
         function onResults(res) {
             canvas.width = window.innerWidth; canvas.height = window.innerHeight;
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             
-            // Desenha Câmera espelhada
             ctx.save();
             ctx.scale(-1, 1);
             ctx.translate(-canvas.width, 0);
             ctx.globalAlpha = 0.4;
             ctx.drawImage(res.image, 0, 0, canvas.width, canvas.height);
             ctx.restore();
-            ctx.globalAlpha = 1.0;
+            
+            // Grid Tech no fundo
+            ctx.fillStyle = "rgba(0, 20, 0, 0.2)";
+            ctx.fillRect(0,0,canvas.width, canvas.height);
 
             if (res.poseLandmarks && state.active) {
                 const lm = res.poseLandmarks;
@@ -124,44 +144,73 @@
         }
 
         function detectKick(ankles, hips) {
-            if (state.kickCooldown || state.ball.active) return;
-            const vLeft = state.lastAnkles.left.y - ankles.left.y;
-            const vRight = state.lastAnkles.right.y - ankles.right.y;
-            const kickThreshold = 0.04; 
+            if (state.kickCooldown || state.ball.active) {
+                // Atualiza posições mesmo em cooldown para não dar salto de velocidade
+                state.lastAnkles = { left: {...ankles.left}, right: {...ankles.right} };
+                return;
+            }
 
-            if (vLeft > kickThreshold || vRight > kickThreshold) {
-                const activeAnkle = vLeft > vRight ? ankles.left : ankles.right;
+            // Calcula velocidade de ambos os pés
+            const speedLeft = calculateSpeed(state.lastAnkles.left, ankles.left);
+            const speedRight = calculateSpeed(state.lastAnkles.right, ankles.right);
+
+            // Gatilho: Velocidade alta + movimento para cima (Y diminuindo)
+            const vLeftY = state.lastAnkles.left.y - ankles.left.y;
+            const vRightY = state.lastAnkles.right.y - ankles.right.y;
+            
+            const kickThreshold = 30; // Km/h mínimos para chutar
+
+            if ((speedLeft > kickThreshold && vLeftY > 0.02) || (speedRight > kickThreshold && vRightY > 0.02)) {
+                
+                const activeSide = speedLeft > speedRight ? 'left' : 'right';
+                const kickSpeed = activeSide === 'left' ? speedLeft : speedRight;
+                const activeAnkle = activeSide === 'left' ? ankles.left : ankles.right;
+                
+                // Exibe Radar
+                document.getElementById('last-speed').innerText = kickSpeed;
+                
+                // Cor do Radar muda com a força
+                const radarColor = kickSpeed > 90 ? '#FF0055' : (kickSpeed > 60 ? '#FFD700' : 'white');
+                document.getElementById('last-speed').style.color = radarColor;
+
+                // Direção
                 const centerHip = (hips.left.x + hips.right.x) / 2;
                 let kickDir = 0;
                 
-                // Lógica de direção corrigida para espelhamento
                 if (activeAnkle.x > centerHip + 0.05) kickDir = -0.6; // Esq
                 else if (activeAnkle.x < centerHip - 0.05) kickDir = 0.6; // Dir
                 else kickDir = (Math.random() - 0.5) * 0.3;
 
-                shootBall(kickDir);
+                shootBall(kickDir, kickSpeed);
             }
-            state.lastAnkles = { left: {y: ankles.left.y}, right: {y: ankles.right.y} };
+            
+            state.lastAnkles = { left: {...ankles.left}, right: {...ankles.right} };
         }
 
-        function shootBall(directionX) {
+        function shootBall(directionX, speed) {
             state.ball.active = true;
             state.ball.velocity.x = directionX * 25;
-            state.ball.velocity.y = -35;
+            
+            // A bola viaja mais rápido se o chute for forte (max speed limit)
+            const ballSpeed = Math.min(speed, 120); 
+            state.ball.velocity.y = -(20 + (ballSpeed * 0.3)); 
+
             state.kickCooldown = true;
             state.attempts++;
             document.getElementById('attempts').innerText = state.attempts + "/10";
             
-            // IA Goleiro
-            if(Math.random() > 0.4) state.goalkeeper.dir = directionX > 0 ? 1 : -1; 
+            // IA Goleiro: Se o chute for MUITO rápido (>100km/h), o goleiro tem menos chance de pegar
+            let defenseChance = 0.6; // Base 60%
+            if (speed > 100) defenseChance = 0.3; // Cai para 30% (Chute indefensável)
+            
+            if(Math.random() > (1 - defenseChance)) state.goalkeeper.dir = directionX > 0 ? 1 : -1; 
             else state.goalkeeper.dir = directionX > 0 ? -1 : 1;
+            
+            // Goleiro reage mais rápido a chutes rápidos
+            state.goalkeeper.speed = 0.02 + (speed * 0.0005);
 
-            // --- AQUI ESTAVA FALTANDO O GATILHO ---
-            // Se chegou a 10 chutes, encerra o jogo
             if (state.attempts >= 10) {
-                setTimeout(() => {
-                    endGame(state.score * 100);
-                }, 3000); // Espera 3s para mostrar o resultado do último chute
+                setTimeout(() => { endGame(state.score * 100); }, 3000);
             }
         }
 
@@ -170,7 +219,7 @@
                 state.ball.x += state.ball.velocity.x / 100;
                 state.ball.y += state.ball.velocity.y / 100;
                 state.ball.radius *= 0.95;
-                state.goalkeeper.x += state.goalkeeper.dir * 0.02;
+                state.goalkeeper.x += state.goalkeeper.dir * state.goalkeeper.speed;
 
                 if (state.ball.y < 0.3) checkGoal();
             } else {
@@ -192,7 +241,6 @@
 
             state.ball.active = false;
             
-            // Só reseta a bola se o jogo NÃO tiver acabado (menos de 10 chutes)
             setTimeout(() => { 
                 if(state.attempts < 10) {
                     state.kickCooldown = false; 
@@ -241,24 +289,15 @@
     </script>
 
     <div id="game-over-modal" class="fixed inset-0 z-[200] bg-black/95 hidden flex-col items-center justify-center backdrop-blur-xl">
-        <div class="text-center animate-bounce mb-6"><i class="fas fa-trophy text-6xl text-yellow-400"></i></div>
         <h2 class="text-5xl font-black italic text-white mb-2 uppercase">Treino <span style="color: #39FF14;">Finalizado</span></h2>
-        
-        <div class="grid grid-cols-2 gap-8 my-8 w-full max-w-md">
-            <div class="bg-zinc-900 p-6 rounded-2xl border border-white/10 text-center">
-                <p class="text-[10px] uppercase text-zinc-500 tracking-widest">Score Final</p>
-                <h3 id="final-score" class="text-4xl font-black text-white">0000</h3>
-            </div>
-            <div class="bg-zinc-900 p-6 rounded-2xl border border-white/10 text-center relative overflow-hidden">
-                <div class="absolute inset-0 bg-yellow-500/10 animate-pulse"></div>
-                <p class="text-[10px] uppercase text-yellow-500 tracking-widest font-bold">XP Ganho</p>
-                <h3 id="final-xp" class="text-4xl font-black text-yellow-400">+0</h3>
-            </div>
+        <div class="bg-zinc-900 p-8 rounded-2xl border border-white/10 text-center mb-8">
+            <p class="text-[10px] uppercase text-zinc-500 tracking-widest">Score Final</p>
+            <h3 id="final-score" class="text-6xl font-black text-white">0000</h3>
+            <p id="final-xp" class="text-sm text-green-400 mt-2 font-bold">+0 XP</p>
         </div>
-
         <div class="flex gap-4">
             <button onclick="location.reload()" class="px-8 py-4 bg-zinc-800 text-white font-bold rounded-xl hover:bg-zinc-700 transition uppercase text-xs tracking-widest">Chutar Novamente</button>
-            <button onclick="window.location.href='index.html'" class="px-8 py-4 text-black font-black rounded-xl hover:scale-105 transition uppercase text-xs tracking-widest" style="background-color: #39FF14;">Voltar ao Menu</button>
+            <button onclick="window.location.href='index.html'" class="px-8 py-4 bg-green-500 text-black font-black rounded-xl hover:scale-105 transition uppercase text-xs tracking-widest">Voltar ao Menu</button>
         </div>
     </div>
 
@@ -266,33 +305,22 @@
         function endGame(score) {
             state.active = false;
             
-            // 1. DEFINE A CHAVE ÚNICA DESTE JOGO
-            const recordKey = 'titan_rec_penalty'; // <--- IMPORTANTE: Mude isso em cada arquivo!
-            
-            // 2. RECUPERA O RECORDE ANTIGO
+            const recordKey = 'titan_rec_penalty';
             const currentRecord = parseInt(localStorage.getItem(recordKey) || '0');
             
-            // 3. MOSTRA O PLACAR INICIAL
-            document.getElementById('final-score').innerText = score;
-
-            // 4. VERIFICA SE É RECORDE
             if (score > currentRecord) {
-                // Salva no navegador
                 localStorage.setItem(recordKey, score);
-                
-                // Adiciona a mensagem visual de "NOVO RECORDE"
                 document.getElementById('final-score').innerHTML = score + "<br><span class='text-sm text-yellow-400 animate-pulse'>NOVO RECORDE!</span>";
+            } else {
+                document.getElementById('final-score').innerText = score;
             }
 
-            // 5. CALCULA XP (Lógica específica do Basquete: XP em dobro)
-            // Lembre-se: No Boxe é /10, no Penalty é /5, aqui é *2. Mantenha a lógica de cada jogo.
             let currentXp = parseInt(localStorage.getItem('titan_xp') || '0');
-            let earnedXp = Math.floor(score * 5); 
+            let earnedXp = Math.floor(score * 5);
             localStorage.setItem('titan_xp', currentXp + earnedXp);
-
-            document.getElementById('final-xp').innerText = "+" + earnedXp + " XP";
             
-            // 6. ABRE A JANELA
+            document.getElementById('final-xp').innerText = "+" + earnedXp + " XP";
+
             const modal = document.getElementById('game-over-modal');
             modal.classList.remove('hidden');
             modal.classList.add('flex');
