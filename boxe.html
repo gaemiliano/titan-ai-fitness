@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>TITAN BOXE - PHYSICS ENGINE</title>
+    <title>TITAN BOXE V2.0 - BIO ENGINE</title>
     
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose"></script>
@@ -23,13 +23,14 @@
         .crit-shake { animation: shake 0.2s cubic-bezier(.36,.07,.19,.97) both; }
         @keyframes shake { 10%, 90% { transform: translate3d(-2px, 0, 0); } 20%, 80% { transform: translate3d(4px, 0, 0); } }
 
-        /* HUD */
+        /* HUD TÉCNICO */
         .hud-text { font-family: 'Fira Code', monospace; text-shadow: 0 0 20px var(--p-color); }
         .power-bar-container { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); width: 200px; height: 10px; background: #333; border-radius: 5px; z-index: 90; overflow: hidden; }
         .power-fill { height: 100%; background: linear-gradient(90deg, #fff, var(--p-color)); width: 0%; transition: width 0.1s; }
         
-        /* ALERTA DE GUARDA */
-        #guard-alert { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: red; font-size: 2rem; font-weight: 900; display: none; z-index: 100; text-shadow: 0 0 10px red; animation: pulse 0.5s infinite; }
+        /* ALERTAS */
+        #guard-alert { position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%); color: red; font-size: 1.5rem; font-weight: 900; display: none; z-index: 100; text-shadow: 0 0 10px red; text-align: center; }
+        #form-alert { position: absolute; top: 60%; left: 50%; transform: translate(-50%, -50%); color: #00F0FF; font-size: 1.2rem; font-weight: 900; display: none; z-index: 100; text-shadow: 0 0 10px cyan; text-align: center; animation: pulse 0.5s infinite; }
         
         /* TIMER */
         #timer-box { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); font-size: 1.5rem; font-weight: bold; z-index: 90; color: white; background: rgba(0,0,0,0.5); padding: 5px 15px; border-radius: 20px; border: 1px solid #333; }
@@ -39,6 +40,7 @@
 
     <div id="flash" class="fixed inset-0 pointer-events-none z-[100] opacity-0 transition-opacity duration-100 bg-white"></div>
     <div id="guard-alert">LEVANTE A GUARDA!</div>
+    <div id="form-alert">ESTIQUE O BRAÇO!</div>
     <div id="timer-box">60s</div>
 
     <div class="absolute top-0 left-0 w-full p-6 flex justify-between items-start z-[90] pointer-events-none">
@@ -47,8 +49,8 @@
             <h1 id="score" class="text-5xl font-black hud-text text-titan-primary">0000</h1>
         </div>
         <div class="text-right">
-            <span class="text-[10px] uppercase font-bold text-cyan-400">Force</span>
-            <h1 id="last-force" class="text-4xl font-black hud-text text-white">0%</h1>
+            <span class="text-[10px] uppercase font-bold text-cyan-400">Extensão</span>
+            <h1 id="last-angle" class="text-4xl font-black hud-text text-white">0°</h1>
         </div>
     </div>
 
@@ -72,14 +74,14 @@
             targets: [],
             lastHands: { left: {x:0, y:0}, right: {x:0, y:0} },
             guardTimer: 0,
-            timeLeft: 60
+            timeLeft: 60,
+            angles: { left: 0, right: 0 }
         };
 
         const pose = new Pose({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`});
         pose.setOptions({ modelComplexity: 1, smoothLandmarks: true, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6 });
         pose.onResults(onResults);
 
-        // INICIALIZAÇÃO AUTOMÁTICA
         const camera = new Camera(video, { onFrame: async () => await pose.send({image: video}), width: 640, height: 480 });
         camera.start().then(() => {
             state.active = true;
@@ -92,9 +94,6 @@
                 if(!state.active) { clearInterval(timerInterval); return; }
                 state.timeLeft--;
                 document.getElementById('timer-box').innerText = state.timeLeft + 's';
-                
-                if(state.timeLeft <= 10) document.getElementById('timer-box').style.color = 'red';
-                
                 if(state.timeLeft <= 0) {
                     clearInterval(timerInterval);
                     endGame(state.score);
@@ -114,6 +113,20 @@
             setTimeout(spawnTarget, Math.max(800, 1500 - (state.score / 20)));
         }
 
+        // --- ENGENHARIA AVANÇADA: CÁLCULO DE ÂNGULOS ---
+        function calculateAngle(a, b, c) {
+            // A=Ombro, B=Cotovelo, C=Punho
+            // Lei dos Cossenos para achar o ângulo em B
+            const AB = Math.sqrt(Math.pow(b.x - a.x, 2) + Math.pow(b.y - a.y, 2));
+            const BC = Math.sqrt(Math.pow(b.x - c.x, 2) + Math.pow(b.y - c.y, 2));
+            const AC = Math.sqrt(Math.pow(c.x - a.x, 2) + Math.pow(c.y - a.y, 2));
+            
+            // Fórmula: arccos( (a² + b² - c²) / 2ab )
+            // Convertendo para graus
+            let angle = Math.acos((BC*BC + AB*AB - AC*AC) / (2*BC*AB)) * (180/Math.PI);
+            return angle;
+        }
+
         function onResults(res) {
             canvas.width = window.innerWidth; canvas.height = window.innerHeight;
             ctx.clearRect(0,0,canvas.width, canvas.height);
@@ -124,28 +137,47 @@
             ctx.drawImage(res.image, 0, 0, canvas.width, canvas.height);
             ctx.restore();
             
-            // Filtro escuro para destacar o neon
             ctx.fillStyle = "rgba(0,0,0,0.4)";
             ctx.fillRect(0,0,canvas.width, canvas.height);
 
             if (res.poseLandmarks) {
                 const lm = res.poseLandmarks;
-                const hands = { left: lm[15], right: lm[16] }; 
-                const shoulders = { left: lm[11], right: lm[12] };
+                
+                // Pontos para cálculo vetorial
+                const leftArm = { shoulder: lm[11], elbow: lm[13], wrist: lm[15] };
+                const rightArm = { shoulder: lm[12], elbow: lm[14], wrist: lm[16] };
+
+                // 1. Calcular Ângulos (Engenharia)
+                state.angles.left = calculateAngle(leftArm.shoulder, leftArm.elbow, leftArm.wrist);
+                state.angles.right = calculateAngle(rightArm.shoulder, rightArm.elbow, rightArm.wrist);
+
+                // Mostra ângulo na tela (Visual Tech)
+                drawAngleInfo(rightArm.elbow, state.angles.right);
+                drawAngleInfo(leftArm.elbow, state.angles.left);
 
                 if(state.active) {
-                    checkGuard(hands, shoulders);
-                    processPhysics(hands);
+                    checkGuard(leftArm.wrist, rightArm.wrist, leftArm.shoulder, rightArm.shoulder);
+                    processPhysics(leftArm.wrist, rightArm.wrist);
                 }
                 drawSkeleton(lm);
             }
             renderTargets();
         }
 
-        function checkGuard(hands, shoulders) {
-            const handsY = (hands.left.y + hands.right.y) / 2;
-            const shoulderY = (shoulders.left.y + shoulders.right.y) / 2;
-            if (handsY > shoulderY + 0.2) { 
+        function drawAngleInfo(elbow, angle) {
+            if(!angle) return;
+            const x = (1 - elbow.x) * canvas.width;
+            const y = elbow.y * canvas.height;
+            
+            ctx.font = "bold 16px 'Fira Code'";
+            ctx.fillStyle = angle > 150 ? "#39FF14" : "white"; // Verde se esticado, branco se não
+            ctx.fillText(Math.round(angle) + "°", x + 20, y);
+        }
+
+        function checkGuard(lw, rw, ls, rs) {
+            const handsY = (lw.y + rw.y) / 2;
+            const shoulderY = (ls.y + rs.y) / 2;
+            if (handsY > shoulderY + 0.3) { // Margem um pouco maior
                 state.guardTimer++;
                 if (state.guardTimer > 60) document.getElementById('guard-alert').style.display = 'block';
             } else {
@@ -154,7 +186,8 @@
             }
         }
 
-        function processPhysics(hands) {
+        function processPhysics(leftHand, rightHand) {
+            const hands = { left: leftHand, right: rightHand };
             const velLeft = Math.hypot(hands.left.x - state.lastHands.left.x, hands.left.y - state.lastHands.left.y);
             const velRight = Math.hypot(hands.right.x - state.lastHands.right.x, hands.right.y - state.lastHands.right.y);
             
@@ -164,23 +197,36 @@
 
             state.targets.forEach((t, i) => {
                 const hand = t.side === 'left' ? hands.left : hands.right;
+                const angle = t.side === 'left' ? state.angles.left : state.angles.right; // Pega o ângulo do braço correto
+                
                 const handX = (1 - hand.x) * canvas.width; 
                 const handY = hand.y * canvas.height;
                 const d = Math.hypot(handX - (t.x * canvas.width), handY - (t.y * canvas.height));
 
                 if (d < 120 && force > 15) {
-                    let points = 100;
-                    if (force > 50) {
-                        points = 300;
-                        document.getElementById('game-container').classList.add('crit-shake');
-                        setTimeout(()=>document.getElementById('game-container').classList.remove('crit-shake'), 200);
-                        document.getElementById('flash').style.opacity = 0.5;
-                        setTimeout(()=>document.getElementById('flash').style.opacity = 0, 100);
+                    
+                    // --- VALIDAÇÃO BIOMÉTRICA ---
+                    // Só conta o soco se o ângulo for maior que 140 graus (braço quase esticado)
+                    if (angle > 140) {
+                        let points = 100;
+                        if (force > 50) {
+                            points = 300;
+                            document.getElementById('game-container').classList.add('crit-shake');
+                            setTimeout(()=>document.getElementById('game-container').classList.remove('crit-shake'), 200);
+                            document.getElementById('flash').style.opacity = 0.5;
+                            setTimeout(()=>document.getElementById('flash').style.opacity = 0, 100);
+                        }
+                        state.score += points;
+                        document.getElementById('last-angle').innerText = Math.round(angle) + "°";
+                        document.getElementById('form-alert').style.display = 'none';
+                        
+                        state.targets.splice(i, 1);
+                        document.getElementById('score').innerText = state.score.toString().padStart(4, '0');
+                    } else {
+                        // Feedback de erro de forma
+                        document.getElementById('form-alert').style.display = 'block';
+                        setTimeout(() => document.getElementById('form-alert').style.display = 'none', 500);
                     }
-                    state.score += points;
-                    document.getElementById('last-force').innerText = Math.round(force) + "%";
-                    state.targets.splice(i, 1);
-                    document.getElementById('score').innerText = state.score.toString().padStart(4, '0');
                 }
             });
             state.lastHands = { left: {...hands.left}, right: {...hands.right} };
@@ -232,34 +278,22 @@
     <script>
         function endGame(score) {
             state.active = false;
-            
-            // 1. DEFINE A CHAVE ÚNICA DESTE JOGO
-            const recordKey = 'titan_rec_boxe'; // <--- IMPORTANTE: Mude isso em cada arquivo!
-            
-            // 2. RECUPERA O RECORDE ANTIGO
+
+            const recordKey = 'titan_rec_boxe';
             const currentRecord = parseInt(localStorage.getItem(recordKey) || '0');
             
-            // 3. MOSTRA O PLACAR INICIAL
-            document.getElementById('final-score').innerText = score;
-
-            // 4. VERIFICA SE É RECORDE
             if (score > currentRecord) {
-                // Salva no navegador
                 localStorage.setItem(recordKey, score);
-                
-                // Adiciona a mensagem visual de "NOVO RECORDE"
                 document.getElementById('final-score').innerHTML = score + "<br><span class='text-sm text-yellow-400 animate-pulse'>NOVO RECORDE!</span>";
+            } else {
+                document.getElementById('final-score').innerText = score;
             }
 
-            // 5. CALCULA XP (Lógica específica do Basquete: XP em dobro)
-            // Lembre-se: No Boxe é /10, no Penalty é /5, aqui é *2. Mantenha a lógica de cada jogo.
             let currentXp = parseInt(localStorage.getItem('titan_xp') || '0');
-            let earnedXp = Math.floor(score / 10); 
+            let earnedXp = Math.floor(score / 10);
             localStorage.setItem('titan_xp', currentXp + earnedXp);
 
             document.getElementById('final-xp').innerText = "+" + earnedXp + " XP";
-            
-            // 6. ABRE A JANELA
             const modal = document.getElementById('game-over-modal');
             modal.classList.remove('hidden');
             modal.classList.add('flex');
