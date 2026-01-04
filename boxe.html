@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>TITAN BOXE - PHYSICS ENGINE</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@700&family=Inter:wght@900&display=swap');
+        :root { --p-color: #FFD700; --s-color: #00F0FF; --crit: #FF0055; }
+        body { background: #000; color: #fff; font-family: 'Inter', sans-serif; overflow: hidden; height: 100dvh; margin: 0; }
+        
+        .game-canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 10; transform: scaleX(-1); }
+        .video-hidden { position: absolute; opacity: 0; pointer-events: none; }
+        
+        /* EFEITOS VISUAIS */
+        .crit-shake { animation: shake 0.2s cubic-bezier(.36,.07,.19,.97) both; }
+        @keyframes shake { 10%, 90% { transform: translate3d(-2px, 0, 0); } 20%, 80% { transform: translate3d(4px, 0, 0); } }
+
+        /* HUD */
+        .hud-text { font-family: 'Fira Code', monospace; text-shadow: 0 0 20px var(--p-color); }
+        .power-bar-container { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); width: 200px; height: 10px; background: #333; border-radius: 5px; z-index: 90; overflow: hidden; }
+        .power-fill { height: 100%; background: linear-gradient(90deg, #fff, var(--p-color)); width: 0%; transition: width 0.1s; }
+        
+        /* ALERTA DE GUARDA */
+        #guard-alert { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: red; font-size: 2rem; font-weight: 900; display: none; z-index: 100; text-shadow: 0 0 10px red; animation: pulse 0.5s infinite; }
+        
+        /* TIMER */
+        #timer-box { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); font-size: 1.5rem; font-weight: bold; z-index: 90; color: white; background: rgba(0,0,0,0.5); padding: 5px 15px; border-radius: 20px; border: 1px solid #333; }
+    </style>
+</head>
+<body>
+
+    <div id="flash" class="fixed inset-0 pointer-events-none z-[100] opacity-0 transition-opacity duration-100 bg-white"></div>
+    <div id="guard-alert">LEVANTE A GUARDA!</div>
+    <div id="timer-box">60s</div>
+
+    <div class="absolute top-0 left-0 w-full p-6 flex justify-between items-start z-[90] pointer-events-none">
+        <div>
+            <span class="text-[10px] uppercase font-bold text-cyan-400">Score</span>
+            <h1 id="score" class="text-5xl font-black hud-text text-titan-primary">0000</h1>
+        </div>
+        <div class="text-right">
+            <span class="text-[10px] uppercase font-bold text-cyan-400">Force</span>
+            <h1 id="last-force" class="text-4xl font-black hud-text text-white">0%</h1>
+        </div>
+    </div>
+
+    <div class="power-bar-container">
+        <div id="power-meter" class="power-fill"></div>
+    </div>
+
+    <div class="relative w-full h-full" id="game-container">
+        <video id="webcam" class="video-hidden" playsinline webkit-playsinline muted autoplay></video>
+        <canvas id="gameCanvas" class="game-canvas"></canvas>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const video = document.getElementById('webcam');
+        
+        let state = {
+            active: false,
+            score: 0,
+            targets: [],
+            lastHands: { left: {x:0, y:0}, right: {x:0, y:0} },
+            guardTimer: 0,
+            timeLeft: 60
+        };
+
+        const pose = new Pose({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`});
+        pose.setOptions({ modelComplexity: 1, smoothLandmarks: true, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6 });
+        pose.onResults(onResults);
+
+        // INICIALIZAÇÃO AUTOMÁTICA
+        const camera = new Camera(video, { onFrame: async () => await pose.send({image: video}), width: 640, height: 480 });
+        camera.start().then(() => {
+            state.active = true;
+            spawnTarget();
+            startTimer();
+        });
+
+        function startTimer() {
+            const timerInterval = setInterval(() => {
+                if(!state.active) { clearInterval(timerInterval); return; }
+                state.timeLeft--;
+                document.getElementById('timer-box').innerText = state.timeLeft + 's';
+                
+                if(state.timeLeft <= 10) document.getElementById('timer-box').style.color = 'red';
+                
+                if(state.timeLeft <= 0) {
+                    clearInterval(timerInterval);
+                    endGame(state.score);
+                }
+            }, 1000);
+        }
+
+        function spawnTarget() {
+            if(!state.active) return;
+            const side = Math.random() > 0.5 ? 'left' : 'right';
+            state.targets.push({
+                x: side === 'left' ? 0.25 : 0.75,
+                y: 0.3 + (Math.random() * 0.3),
+                r: 10, maxR: 90, side, life: 1.0,
+                color: side === 'left' ? '#00F0FF' : '#FFD700'
+            });
+            setTimeout(spawnTarget, Math.max(800, 1500 - (state.score / 20)));
+        }
+
+        function onResults(res) {
+            canvas.width = window.innerWidth; canvas.height = window.innerHeight;
+            ctx.clearRect(0,0,canvas.width, canvas.height);
+            
+            ctx.save();
+            ctx.scale(-1, 1);
+            ctx.translate(-canvas.width, 0);
+            ctx.drawImage(res.image, 0, 0, canvas.width, canvas.height);
+            ctx.restore();
+            
+            // Filtro escuro para destacar o neon
+            ctx.fillStyle = "rgba(0,0,0,0.4)";
+            ctx.fillRect(0,0,canvas.width, canvas.height);
+
+            if (res.poseLandmarks) {
+                const lm = res.poseLandmarks;
+                const hands = { left: lm[15], right: lm[16] }; 
+                const shoulders = { left: lm[11], right: lm[12] };
+
+                if(state.active) {
+                    checkGuard(hands, shoulders);
+                    processPhysics(hands);
+                }
+                drawSkeleton(lm);
+            }
+            renderTargets();
+        }
+
+        function checkGuard(hands, shoulders) {
+            const handsY = (hands.left.y + hands.right.y) / 2;
+            const shoulderY = (shoulders.left.y + shoulders.right.y) / 2;
+            if (handsY > shoulderY + 0.2) { 
+                state.guardTimer++;
+                if (state.guardTimer > 60) document.getElementById('guard-alert').style.display = 'block';
+            } else {
+                state.guardTimer = 0;
+                document.getElementById('guard-alert').style.display = 'none';
+            }
+        }
+
+        function processPhysics(hands) {
+            const velLeft = Math.hypot(hands.left.x - state.lastHands.left.x, hands.left.y - state.lastHands.left.y);
+            const velRight = Math.hypot(hands.right.x - state.lastHands.right.x, hands.right.y - state.lastHands.right.y);
+            
+            const maxVel = Math.max(velLeft, velRight);
+            const force = Math.min(maxVel * 1000, 100);
+            document.getElementById('power-meter').style.width = force + "%";
+
+            state.targets.forEach((t, i) => {
+                const hand = t.side === 'left' ? hands.left : hands.right;
+                const handX = (1 - hand.x) * canvas.width; 
+                const handY = hand.y * canvas.height;
+                const d = Math.hypot(handX - (t.x * canvas.width), handY - (t.y * canvas.height));
+
+                if (d < 120 && force > 15) {
+                    let points = 100;
+                    if (force > 50) {
+                        points = 300;
+                        document.getElementById('game-container').classList.add('crit-shake');
+                        setTimeout(()=>document.getElementById('game-container').classList.remove('crit-shake'), 200);
+                        document.getElementById('flash').style.opacity = 0.5;
+                        setTimeout(()=>document.getElementById('flash').style.opacity = 0, 100);
+                    }
+                    state.score += points;
+                    document.getElementById('last-force').innerText = Math.round(force) + "%";
+                    state.targets.splice(i, 1);
+                    document.getElementById('score').innerText = state.score.toString().padStart(4, '0');
+                }
+            });
+            state.lastHands = { left: {...hands.left}, right: {...hands.right} };
+        }
+
+        function renderTargets() {
+            state.targets.forEach(t => {
+                t.r += (t.maxR - t.r) * 0.1;
+                ctx.beginPath();
+                ctx.arc(t.x * canvas.width, t.y * canvas.height, t.r, 0, Math.PI * 2);
+                ctx.strokeStyle = t.color; ctx.lineWidth = 5; ctx.stroke();
+            });
+        }
+
+        function drawSkeleton(lm) {
+            ctx.strokeStyle = "rgba(255,255,255,0.8)"; ctx.lineWidth = 4;
+            const connect = (a, b) => {
+                const p1 = lm[a]; const p2 = lm[b];
+                ctx.beginPath();
+                ctx.moveTo((1 - p1.x) * canvas.width, p1.y * canvas.height);
+                ctx.lineTo((1 - p2.x) * canvas.width, p2.y * canvas.height);
+                ctx.stroke();
+            };
+            connect(11, 13); connect(13, 15); 
+            connect(12, 14); connect(14, 16); 
+        }
+    </script>
+
+    <div id="game-over-modal" class="fixed inset-0 z-[200] bg-black/95 hidden flex-col items-center justify-center backdrop-blur-xl">
+        <div class="text-center animate-bounce mb-6"><i class="fas fa-trophy text-6xl text-yellow-400"></i></div>
+        <h2 class="text-5xl font-black italic text-white mb-2 uppercase">Sessão <span style="color: #FFD700;">Finalizada</span></h2>
+        <div class="grid grid-cols-2 gap-8 my-8 w-full max-w-md">
+            <div class="bg-zinc-900 p-6 rounded-2xl border border-white/10 text-center">
+                <p class="text-[10px] uppercase text-zinc-500 tracking-widest">Score Final</p>
+                <h3 id="final-score" class="text-4xl font-black text-white">0000</h3>
+            </div>
+            <div class="bg-zinc-900 p-6 rounded-2xl border border-white/10 text-center relative overflow-hidden">
+                <div class="absolute inset-0 bg-yellow-500/10 animate-pulse"></div>
+                <p class="text-[10px] uppercase text-yellow-500 tracking-widest font-bold">XP Ganho</p>
+                <h3 id="final-xp" class="text-4xl font-black text-yellow-400">+0</h3>
+            </div>
+        </div>
+        <div class="flex gap-4">
+            <button onclick="location.reload()" class="px-8 py-4 bg-zinc-800 text-white font-bold rounded-xl hover:bg-zinc-700 transition uppercase text-xs tracking-widest">Jogar Novamente</button>
+            <button onclick="window.location.href='index.html'" class="px-8 py-4 text-black font-black rounded-xl hover:scale-105 transition uppercase text-xs tracking-widest" style="background-color: #FFD700;">Voltar ao Menu</button>
+        </div>
+    </div>
+
+    <script>
+        function endGame(score) {
+            state.active = false;
+            
+            // 1. DEFINE A CHAVE ÚNICA DESTE JOGO
+            const recordKey = 'titan_rec_boxe'; // <--- IMPORTANTE: Mude isso em cada arquivo!
+            
+            // 2. RECUPERA O RECORDE ANTIGO
+            const currentRecord = parseInt(localStorage.getItem(recordKey) || '0');
+            
+            // 3. MOSTRA O PLACAR INICIAL
+            document.getElementById('final-score').innerText = score;
+
+            // 4. VERIFICA SE É RECORDE
+            if (score > currentRecord) {
+                // Salva no navegador
+                localStorage.setItem(recordKey, score);
+                
+                // Adiciona a mensagem visual de "NOVO RECORDE"
+                document.getElementById('final-score').innerHTML = score + "<br><span class='text-sm text-yellow-400 animate-pulse'>NOVO RECORDE!</span>";
+            }
+
+            // 5. CALCULA XP (Lógica específica do Basquete: XP em dobro)
+            // Lembre-se: No Boxe é /10, no Penalty é /5, aqui é *2. Mantenha a lógica de cada jogo.
+            let currentXp = parseInt(localStorage.getItem('titan_xp') || '0');
+            let earnedXp = Math.floor(score / 10); 
+            localStorage.setItem('titan_xp', currentXp + earnedXp);
+
+            document.getElementById('final-xp').innerText = "+" + earnedXp + " XP";
+            
+            // 6. ABRE A JANELA
+            const modal = document.getElementById('game-over-modal');
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+        }
+    </script>
+</body>
+</html>

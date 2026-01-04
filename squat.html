@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>TITAN SQUAT DEFENSE</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@700&family=Inter:wght@900&display=swap');
+        :root { --neon-purple: #D946EF; --neon-blue: #00F0FF; }
+        body { background: #050505; color: white; font-family: 'Inter', sans-serif; overflow: hidden; height: 100dvh; margin: 0; }
+        
+        /* TÚNEL INFINITO */
+        .tunnel {
+            position: absolute; inset: 0;
+            background: repeating-linear-gradient(transparent 0, transparent 40px, rgba(217, 70, 239, 0.1) 41px, rgba(217, 70, 239, 0.1) 42px),
+                        repeating-linear-gradient(90deg, transparent 0, transparent 40px, rgba(0, 240, 255, 0.1) 41px, rgba(0, 240, 255, 0.1) 42px);
+            transform: perspective(400px);
+            animation: moveTunnel 5s linear infinite;
+            z-index: 1;
+        }
+        @keyframes moveTunnel { from { background-position: 0 0; } to { background-position: 0 1000px; } }
+
+        /* BARREIRA (OBSTÁCULO) */
+        .barrier {
+            position: absolute; top: -100px; left: 0; width: 100%; height: 60px;
+            background: rgba(217, 70, 239, 0.8);
+            box-shadow: 0 0 50px var(--neon-purple);
+            border-bottom: 5px solid white;
+            z-index: 20; display: none;
+        }
+
+        /* HUD */
+        .hud-top { position: absolute; top: 0; width: 100%; padding: 20px; display: flex; justify-content: space-between; z-index: 50; }
+        .score-val { font-family: 'Fira Code', monospace; font-size: 3rem; color: var(--neon-purple); text-shadow: 0 0 10px var(--neon-purple); }
+
+        .video-hidden { position: absolute; opacity: 0; pointer-events: none; }
+        .game-canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 10; transform: scaleX(-1); }
+
+        /* MENSAGEM DE CALIBRAÇÃO */
+        #status-msg {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            font-size: 2rem; font-weight: 900; color: white; text-align: center;
+            text-shadow: 0 0 20px var(--neon-purple); z-index: 100;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="tunnel" id="tunnel-bg"></div>
+    <div class="barrier" id="obstacle"></div>
+
+    <div id="status-msg">FIQUE EM PÉ<br>CALIBRANDO...</div>
+
+    <div class="hud-top">
+        <div class="text-center">
+            <p class="text-[10px] uppercase tracking-widest text-zinc-400">Score</p>
+            <h1 id="score" class="score-val">0</h1>
+        </div>
+        <div class="text-center">
+            <p class="text-[10px] uppercase tracking-widest text-zinc-400">Vida</p>
+            <div class="flex gap-2 mt-2" id="lives">
+                <i class="fas fa-heart text-red-500 text-2xl"></i>
+                <i class="fas fa-heart text-red-500 text-2xl"></i>
+                <i class="fas fa-heart text-red-500 text-2xl"></i>
+            </div>
+        </div>
+    </div>
+
+    <video id="webcam" class="video-hidden" playsinline webkit-playsinline muted autoplay></video>
+    <canvas id="gameCanvas" class="game-canvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const video = document.getElementById('webcam');
+        const obstacle = document.getElementById('obstacle');
+
+        let state = {
+            active: false,
+            calibrating: true,
+            score: 0,
+            lives: 3,
+            standingY: 0, // Altura do ombro em pé
+            isSquatting: false,
+            obstacle: { y: -100, active: false, speed: 5 },
+            feedback: ""
+        };
+
+        const pose = new Pose({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`});
+        pose.setOptions({ modelComplexity: 1, smoothLandmarks: true, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+        pose.onResults(onResults);
+
+        const camera = new Camera(video, { onFrame: async () => await pose.send({image: video}), width: 640, height: 480 });
+        camera.start();
+
+        // CALIBRAÇÃO INICIAL (3 Segundos)
+        let calibrationFrames = 0;
+        let calibrationSum = 0;
+
+        function onResults(res) {
+            canvas.width = window.innerWidth; canvas.height = window.innerHeight;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            ctx.save();
+            ctx.scale(-1, 1);
+            ctx.translate(-canvas.width, 0);
+            ctx.globalAlpha = 0.4;
+            ctx.drawImage(res.image, 0, 0, canvas.width, canvas.height);
+            ctx.restore();
+            ctx.globalAlpha = 1.0;
+
+            if (res.poseLandmarks) {
+                const lm = res.poseLandmarks;
+                // Usamos a média dos ombros (11 e 12) como referência de altura
+                const shoulderY = (lm[11].y + lm[12].y) / 2;
+
+                if (state.calibrating) {
+                    processCalibration(shoulderY);
+                } else if (state.active) {
+                    processGame(shoulderY);
+                }
+                
+                drawSkeleton(lm);
+            }
+
+            if(state.active) updateObstacle();
+        }
+
+        function processCalibration(y) {
+            calibrationSum += y;
+            calibrationFrames++;
+            
+            if (calibrationFrames > 60) { // ~2-3 segundos
+                state.standingY = calibrationSum / calibrationFrames;
+                state.calibrating = false;
+                state.active = true;
+                document.getElementById('status-msg').innerText = "";
+                spawnObstacle();
+                playSound(600, 'sine'); // Start sound
+            }
+        }
+
+        function processGame(currentY) {
+            // Se a altura atual for maior (mais baixo na tela) que a altura em pé + margem
+            // OY é invertido: 0 é topo, 1 é base. Então agachar aumenta o Y.
+            const squatThreshold = state.standingY + 0.15; 
+            
+            if (currentY > squatThreshold) {
+                state.isSquatting = true;
+                ctx.fillStyle = "#39FF14"; // Verde = Seguro
+                ctx.fillText("AGACHADO", 50, 50);
+            } else {
+                state.isSquatting = false;
+            }
+        }
+
+        function spawnObstacle() {
+            if(!state.active) return;
+            state.obstacle.active = true;
+            state.obstacle.y = -100;
+            state.obstacle.speed = 10 + (state.score * 0.5); // Acelera com o tempo
+            obstacle.style.display = 'block';
+        }
+
+        function updateObstacle() {
+            if (!state.obstacle.active) return;
+
+            // Move obstáculo para baixo (perspectiva 2D simulando 3D vindo na direção)
+            state.obstacle.y += state.obstacle.speed;
+            
+            // Atualiza visual
+            // Simula "Crescimento" (chegando perto)
+            const progress = state.obstacle.y / window.innerHeight;
+            const scale = 0.5 + (progress * 0.5); 
+            obstacle.style.top = state.obstacle.y + 'px';
+            obstacle.style.transform = `scale(${scale})`;
+
+            // COLISÃO (Momento Crítico)
+            // A barreira "bate" quando chega perto do fim da tela (ex: 70% da altura)
+            if (state.obstacle.y > window.innerHeight * 0.6 && state.obstacle.y < window.innerHeight * 0.8) {
+                if (!state.isSquatting) {
+                    hitPlayer();
+                }
+            }
+
+            // Passou da tela
+            if (state.obstacle.y > window.innerHeight) {
+                // Sucesso
+                if(state.lives > 0) { // Só pontua se estiver vivo
+                    state.score += 100;
+                    document.getElementById('score').innerText = state.score;
+                    state.obstacle.active = false;
+                    setTimeout(spawnObstacle, 1000); // Próximo obstáculo
+                }
+            }
+        }
+
+        function hitPlayer() {
+            // Evita hit múltiplo no mesmo obstáculo
+            if(state.obstacle.active) {
+                state.lives--;
+                updateLives();
+                playSound(150, 'sawtooth'); // Som de dano
+                document.body.style.backgroundColor = "red";
+                setTimeout(() => document.body.style.backgroundColor = "#050505", 100);
+                
+                state.obstacle.active = false; // Remove obstáculo
+                obstacle.style.display = 'none';
+
+                if (state.lives <= 0) {
+                    endGame(state.score);
+                } else {
+                    setTimeout(spawnObstacle, 1500);
+                }
+            }
+        }
+
+        function updateLives() {
+            const container = document.getElementById('lives');
+            container.innerHTML = '';
+            for(let i=0; i<state.lives; i++) {
+                container.innerHTML += '<i class="fas fa-heart text-red-500 text-2xl"></i>';
+            }
+        }
+
+        function drawSkeleton(lm) {
+            ctx.strokeStyle = state.isSquatting ? "#39FF14" : "white"; 
+            ctx.lineWidth = 4;
+            const connect = (a, b) => {
+                ctx.beginPath();
+                ctx.moveTo((1 - lm[a].x) * canvas.width, lm[a].y * canvas.height);
+                ctx.lineTo((1 - lm[b].x) * canvas.width, lm[b].y * canvas.height);
+                ctx.stroke();
+            };
+            connect(11, 12); // Ombros
+            connect(23, 24); // Quadril
+            connect(11, 23); connect(12, 24); // Tronco
+        }
+
+        function playSound(freq, type) {
+            const aud = new AudioContext();
+            const osc = aud.createOscillator();
+            const gain = aud.createGain();
+            osc.type = type; osc.frequency.value = freq;
+            osc.connect(gain); gain.connect(aud.destination);
+            osc.start(); 
+            gain.gain.exponentialRampToValueAtTime(0.00001, aud.currentTime + 0.1);
+            osc.stop(aud.currentTime + 0.1);
+        }
+    </script>
+
+    <div id="game-over-modal" class="fixed inset-0 z-[200] bg-black/95 hidden flex-col items-center justify-center backdrop-blur-xl">
+        <h2 class="text-5xl font-black italic text-white mb-2 uppercase">FIM DE <span style="color: #D946EF;">TREINO</span></h2>
+        <div class="bg-zinc-900 p-8 rounded-2xl border border-white/10 text-center mb-8">
+            <p class="text-[10px] uppercase text-zinc-500 tracking-widest">Score Final</p>
+            <h3 id="final-score" class="text-6xl font-black text-white">0000</h3>
+            <p class="text-sm text-purple-400 mt-2 font-bold">+ XP CALCULADO</p>
+        </div>
+        <div class="flex gap-4">
+            <button onclick="location.reload()" class="px-8 py-4 bg-zinc-800 text-white font-bold rounded-xl uppercase tracking-widest">Tentar Novamente</button>
+            <button onclick="window.location.href='index.html'" class="px-8 py-4 bg-purple-600 text-white font-black rounded-xl uppercase tracking-widest">Voltar ao Menu</button>
+        </div>
+    </div>
+
+    <script>
+        function endGame(score) {
+            state.active = false;
+            document.getElementById('final-score').innerText = score;
+            // Salva XP no localStorage
+            let currentXp = parseInt(localStorage.getItem('titan_xp') || '0');
+            let earnedXp = Math.floor(score / 5); // 500 pts = 100 XP
+            localStorage.setItem('titan_xp', currentXp + earnedXp);
+            
+            const modal = document.getElementById('game-over-modal');
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+        }
+    </script>
+</body>
+</html>

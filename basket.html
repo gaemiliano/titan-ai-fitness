@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>TITAN HOOP MASTER</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@700&family=Inter:wght@900&display=swap');
+        :root { --b-orange: #FF8800; --floor: #1a1a1a; }
+        body { background: #050505; color: white; font-family: 'Inter', sans-serif; overflow: hidden; height: 100dvh; margin: 0; }
+        
+        /* QUADRA DIGITAL */
+        .court-floor {
+            position: absolute; bottom: 0; width: 100%; height: 40%;
+            background: repeating-linear-gradient(90deg, #222 0px, #222 48px, #333 50px);
+            transform: perspective(600px) rotateX(45deg);
+            z-index: 1; pointer-events: none; opacity: 0.5;
+        }
+
+        /* CESTA */
+        .hoop-container {
+            position: absolute; top: 15%; left: 50%; transform: translateX(-50%);
+            width: 120px; height: 10px; z-index: 20;
+            transition: left 0.1s; /* Movimento suave se a cesta se mover */
+        }
+        .backboard {
+            position: absolute; top: -80px; left: -40px; width: 200px; height: 140px;
+            border: 4px solid white; background: rgba(255,255,255,0.1); border-radius: 10px;
+            box-shadow: 0 0 20px rgba(255,255,255,0.2);
+        }
+        .rim {
+            position: absolute; top: 0; left: 0; width: 120px; height: 10px;
+            background: var(--b-orange); border-radius: 10px;
+            box-shadow: 0 0 15px var(--b-orange);
+        }
+        .net {
+            position: absolute; top: 10px; left: 10px; width: 100px; height: 80px;
+            border-left: 2px dashed white; border-right: 2px dashed white; border-bottom: 2px dashed white;
+            opacity: 0.3; transform: perspective(100px) rotateX(-20deg);
+        }
+
+        /* HUD */
+        .hud-top { position: absolute; top: 0; width: 100%; padding: 20px; display: flex; justify-content: space-between; z-index: 50; }
+        .score-val { font-family: 'Fira Code', monospace; font-size: 3rem; color: var(--b-orange); text-shadow: 0 0 10px var(--b-orange); }
+
+        .video-hidden { position: absolute; opacity: 0; pointer-events: none; }
+        .game-canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 10; transform: scaleX(-1); }
+        
+        #guide-msg {
+            position: absolute; bottom: 20%; width: 100%; text-align: center;
+            font-size: 1.5rem; font-weight: 900; color: white; text-shadow: 0 2px 4px black; z-index: 60;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="court-floor"></div>
+    
+    <div class="hoop-container" id="hoop">
+        <div class="backboard">
+            <div class="w-20 h-16 border-2 border-white absolute bottom-4 left-1/2 -translate-x-1/2"></div>
+        </div>
+        <div class="rim"></div>
+        <div class="net"></div>
+    </div>
+
+    <div id="guide-msg">SEGURE A BOLA PARA COMEÇAR</div>
+
+    <div class="hud-top">
+        <div class="text-center">
+            <p class="text-[10px] uppercase tracking-widest text-zinc-400">Pontos</p>
+            <h1 id="score" class="score-val">0</h1>
+        </div>
+        <div class="text-center">
+            <p class="text-[10px] uppercase tracking-widest text-zinc-400">Arremessos</p>
+            <h1 id="attempts" class="score-val text-white">0/10</h1>
+        </div>
+    </div>
+
+    <video id="webcam" class="video-hidden" playsinline webkit-playsinline muted autoplay></video>
+    <canvas id="gameCanvas" class="game-canvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const video = document.getElementById('webcam');
+        const hoopEl = document.getElementById('hoop');
+
+        let state = {
+            active: true,
+            score: 0,
+            attempts: 0,
+            ball: { x: 0.5, y: 0.8, r: 30, vx: 0, vy: 0, active: false, held: true }, // Ball state
+            hoop: { x: 0.5, y: 0.15, w: 0.15 }, // Hoop position relative (0-1)
+            lastWrist: { y: 0 },
+            feedback: ""
+        };
+
+        const pose = new Pose({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`});
+        pose.setOptions({ modelComplexity: 1, smoothLandmarks: true, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+        pose.onResults(onResults);
+
+        new Camera(video, { onFrame: async () => await pose.send({image: video}), width: 640, height: 480 }).start();
+
+        function onResults(res) {
+            canvas.width = window.innerWidth; canvas.height = window.innerHeight;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Desenha Avatar Fantasma
+            ctx.save();
+            ctx.scale(-1, 1);
+            ctx.translate(-canvas.width, 0);
+            ctx.globalAlpha = 0.3;
+            ctx.drawImage(res.image, 0, 0, canvas.width, canvas.height);
+            ctx.restore();
+            ctx.globalAlpha = 1.0;
+
+            if (res.poseLandmarks && state.active) {
+                const lm = res.poseLandmarks;
+                // Mão Direita (16=Pulso, 14=Cotovelo, 12=Ombro)
+                // Vamos usar a mão direita como principal por enquanto (ou a mais alta)
+                const rWrist = lm[16];
+                const lWrist = lm[15];
+                
+                // Escolhe a mão que está mais alta
+                const activeHand = rWrist.y < lWrist.y ? rWrist : lWrist; 
+
+                processThrow(activeHand, lm);
+            }
+            
+            if(state.active) updatePhysics();
+            drawBall();
+        }
+
+        function processThrow(hand, lm) {
+            // Se a bola está voando, ignora a mão
+            if(state.ball.active && !state.ball.held) return;
+
+            // Se a bola está "na mão" (held)
+            if(state.ball.held) {
+                // A bola segue a mão do jogador
+                // Correção de espelhamento: X invertido
+                state.ball.x = 1 - hand.x; 
+                state.ball.y = hand.y;
+
+                // DETECÇÃO DE ARREMESSO (Gesto de chicote para cima)
+                const velY = state.lastWrist.y - hand.y; // Positivo se subiu
+                const throwThreshold = 0.05; // Velocidade necessária
+
+                // Se moveu rápido pra cima E a mão está na metade superior da tela
+                if (velY > throwThreshold && hand.y < 0.6) {
+                    shoot(hand.x, velY);
+                }
+                
+                document.getElementById('guide-msg').innerText = "ARREMESSE!";
+            }
+            
+            state.lastWrist = { y: hand.y };
+        }
+
+        function shoot(handX, force) {
+            state.ball.held = false;
+            state.ball.active = true;
+            state.attempts++;
+            document.getElementById('attempts').innerText = state.attempts + "/10";
+            document.getElementById('guide-msg').innerText = "";
+
+            // CÁLCULO DE TRAJETÓRIA
+            // X: Depende de onde o jogador está em relação ao centro
+            // Se handX (normalizado) < 0.5 (direita da tela), vai pra esquerda
+            const errorX = (0.5 - handX) * 15; // Desvio lateral
+            
+            state.ball.vx = errorX; 
+            state.ball.vy = -25 - (force * 100); // Força pra cima baseada na velocidade do braço
+            
+            // Som de arremesso
+            playSound(300, 'triangle');
+
+            if(state.attempts >= 10) setTimeout(() => endGame(state.score * 50), 4000);
+        }
+
+        function updatePhysics() {
+            // Mover a Cesta (Dificuldade Dinâmica)
+            // A cesta oscila levemente para a esquerda e direita
+            const time = Date.now() / 1000;
+            const hoopOffset = Math.sin(time) * 0.2; // Oscilação
+            state.hoop.x = 0.5 + (state.score > 3 ? hoopOffset : 0); // Só move depois de 3 pontos
+            
+            // Atualiza visual da cesta via CSS
+            hoopEl.style.left = (state.hoop.x * 100) + "%";
+
+            if (state.ball.active && !state.ball.held) {
+                // Física Simples
+                state.ball.x += state.ball.vx / 100;
+                state.ball.y += state.ball.vy / 100;
+                state.ball.vy += 0.8; // Gravidade
+                
+                // Efeito de Profundidade (bola diminui)
+                if (state.ball.r > 15) state.ball.r -= 0.3;
+
+                // COLISÃO COM A CESTA
+                // A cesta está em Y=0.15 (aprox)
+                // A bola precisa estar descendo (vy > 0)
+                if (state.ball.y > 0.15 && state.ball.y < 0.25 && state.ball.vy > 0) {
+                    const dist = Math.abs(state.ball.x - state.hoop.x);
+                    
+                    if (dist < 0.08) { // Entrou!
+                        state.score += 2; // Cesta de 2 pontos
+                        if(Math.abs(dist) < 0.02) {
+                            state.score += 1; // SWISH! (Perfeito) +1 ponto extra
+                            state.feedback = "SWISH!";
+                        } else {
+                            state.feedback = "CESTA!";
+                        }
+                        document.getElementById('score').innerText = state.score;
+                        playSound(600, 'sine');
+                        resetBall();
+                    }
+                }
+
+                // Caiu no chão (Reset)
+                if (state.ball.y > 1.2) {
+                    state.feedback = "AIRBALL...";
+                    resetBall();
+                }
+            }
+        }
+
+        function resetBall() {
+            state.ball.active = false;
+            // Delay para pegar a bola de novo
+            setTimeout(() => {
+                if(state.attempts < 10) {
+                    state.ball.held = true;
+                    state.ball.r = 30;
+                    state.feedback = "";
+                }
+            }, 1000);
+        }
+
+        function drawBall() {
+            if(!state.active) return;
+            
+            const bx = state.ball.x * canvas.width;
+            const by = state.ball.y * canvas.height;
+            
+            ctx.shadowBlur = 15; ctx.shadowColor = "orange";
+            ctx.fillStyle = "#FF8800";
+            
+            // Desenha a bola
+            ctx.beginPath();
+            ctx.arc(bx, by, state.ball.r, 0, Math.PI*2);
+            ctx.fill();
+            
+            // Linhas da bola de basquete
+            ctx.strokeStyle = "#333"; ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.moveTo(bx - state.ball.r, by); ctx.lineTo(bx + state.ball.r, by); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(bx, by - state.ball.r); ctx.lineTo(bx, by + state.ball.r); ctx.stroke();
+
+            // Feedback Texto
+            if(state.feedback) {
+                ctx.font = "900 50px 'Inter'";
+                ctx.fillStyle = "white";
+                ctx.textAlign = "center";
+                ctx.fillText(state.feedback, canvas.width/2, canvas.height/2);
+            }
+        }
+
+        function playSound(freq, type) {
+            const aud = new AudioContext();
+            const osc = aud.createOscillator();
+            const gain = aud.createGain();
+            osc.type = type; osc.frequency.value = freq;
+            osc.connect(gain); gain.connect(aud.destination);
+            osc.start(); 
+            gain.gain.exponentialRampToValueAtTime(0.00001, aud.currentTime + 0.3);
+            osc.stop(aud.currentTime + 0.3);
+        }
+    </script>
+
+    <div id="game-over-modal" class="fixed inset-0 z-[200] bg-black/95 hidden flex-col items-center justify-center backdrop-blur-xl">
+        <div class="text-center animate-bounce mb-6"><i class="fas fa-trophy text-6xl text-yellow-400"></i></div>
+        <h2 class="text-5xl font-black italic text-white mb-2 uppercase">Partida <span style="color: #FF8800;">Encerrada</span></h2>
+        <div class="grid grid-cols-2 gap-8 my-8 w-full max-w-md">
+            <div class="bg-zinc-900 p-6 rounded-2xl border border-white/10 text-center">
+                <p class="text-[10px] uppercase text-zinc-500 tracking-widest">Score Final</p>
+                <h3 id="final-score" class="text-4xl font-black text-white">0000</h3>
+            </div>
+            <div class="bg-zinc-900 p-6 rounded-2xl border border-white/10 text-center relative overflow-hidden">
+                <div class="absolute inset-0 bg-yellow-500/10 animate-pulse"></div>
+                <p class="text-[10px] uppercase text-yellow-500 tracking-widest font-bold">XP Ganho</p>
+                <h3 id="final-xp" class="text-4xl font-black text-yellow-400">+0</h3>
+            </div>
+        </div>
+        <div class="flex gap-4">
+            <button onclick="location.reload()" class="px-8 py-4 bg-zinc-800 text-white font-bold rounded-xl hover:bg-zinc-700 transition uppercase text-xs tracking-widest">Jogar Novamente</button>
+            <button onclick="window.location.href='index.html'" class="px-8 py-4 text-black font-black rounded-xl hover:scale-105 transition uppercase text-xs tracking-widest" style="background-color: #FF8800;">Voltar ao Menu</button>
+        </div>
+    </div>
+
+    <script>
+        function endGame(score) {
+            state.active = false;
+            
+            // 1. DEFINE A CHAVE ÚNICA DESTE JOGO
+            const recordKey = 'titan_rec_basket'; // <--- IMPORTANTE: Mude isso em cada arquivo!
+            
+            // 2. RECUPERA O RECORDE ANTIGO
+            const currentRecord = parseInt(localStorage.getItem(recordKey) || '0');
+            
+            // 3. MOSTRA O PLACAR INICIAL
+            document.getElementById('final-score').innerText = score;
+
+            // 4. VERIFICA SE É RECORDE
+            if (score > currentRecord) {
+                // Salva no navegador
+                localStorage.setItem(recordKey, score);
+                
+                // Adiciona a mensagem visual de "NOVO RECORDE"
+                document.getElementById('final-score').innerHTML = score + "<br><span class='text-sm text-yellow-400 animate-pulse'>NOVO RECORDE!</span>";
+            }
+
+            // 5. CALCULA XP (Lógica específica do Basquete: XP em dobro)
+            // Lembre-se: No Boxe é /10, no Penalty é /5, aqui é *2. Mantenha a lógica de cada jogo.
+            let currentXp = parseInt(localStorage.getItem('titan_xp') || '0');
+            let earnedXp = Math.floor(score * 2); 
+            localStorage.setItem('titan_xp', currentXp + earnedXp);
+
+            document.getElementById('final-xp').innerText = "+" + earnedXp + " XP";
+            
+            // 6. ABRE A JANELA
+            const modal = document.getElementById('game-over-modal');
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+        }
+    </script>
+</body>
+</html>

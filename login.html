@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TITAN ACCESS // LOGIN</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@700&family=Inter:wght@900&display=swap');
+        body { background-color: #000; color: white; font-family: 'Inter', sans-serif; overflow: hidden; }
+        
+        .scan-line {
+            position: absolute; width: 100%; height: 2px; background: #00F0FF;
+            animation: scan 3s linear infinite; opacity: 0.5; box-shadow: 0 0 10px #00F0FF;
+        }
+        @keyframes scan { 0% { top: 0%; } 100% { top: 100%; } }
+        
+        .input-box {
+            background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1);
+            font-family: 'Fira Code', monospace; transition: all 0.3s;
+        }
+        .input-box:focus {
+            border-color: #FFD700; outline: none; box-shadow: 0 0 20px rgba(255, 215, 0, 0.2);
+        }
+    </style>
+</head>
+<body class="flex items-center justify-center h-screen relative">
+
+    <div class="scan-line"></div>
+    
+    <div class="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20"></div>
+
+    <div class="z-10 text-center w-full max-w-md p-8">
+        
+        <div class="mb-12 relative group">
+            <div class="absolute inset-0 bg-titan-primary blur-3xl opacity-20 group-hover:opacity-40 transition duration-1000" style="background-color: #FFD700;"></div>
+            <i class="fas fa-fingerprint text-8xl text-white mb-4 animate-pulse"></i>
+            <h1 class="text-6xl font-black italic tracking-tighter uppercase">TITAN <span style="color: #FFD700;">ID</span></h1>
+            <p class="text-cyan-400 text-[10px] tracking-[0.8em] uppercase mt-2">Biometric Access Required</p>
+        </div>
+
+        <div class="space-y-6">
+            <div>
+                <label class="block text-left text-[10px] uppercase tracking-widest text-zinc-500 mb-2">Identificação do Agente</label>
+                <input type="text" id="username" placeholder="DIGITE SEU CODINOME" maxlength="12" 
+                    class="input-box w-full p-4 text-center text-xl text-white rounded-xl uppercase placeholder-zinc-700">
+            </div>
+
+            <button onclick="registerUser()" 
+                class="w-full py-5 bg-white text-black font-black text-lg rounded-xl hover:bg-[#FFD700] hover:scale-105 transition-all shadow-[0_0_30px_rgba(255,255,255,0.2)] uppercase tracking-widest">
+                Iniciar Sistema
+            </button>
+        </div>
+
+        <p class="mt-8 text-[9px] text-zinc-600 uppercase">System V12.4 • Secure Connection</p>
+    </div>
+
+    <script>
+        // Verifica se já existe usuário. Se existir, pula pro menu.
+        window.onload = () => {
+            if(localStorage.getItem('titan_user')) {
+                // Descomente a linha abaixo para login automático
+                // window.location.href = 'index.html';
+                document.getElementById('username').value = localStorage.getItem('titan_user');
+            }
+        }
+
+        function registerUser() {
+            const name = document.getElementById('username').value.trim();
+            
+            if(name.length < 3) {
+                alert("ACESSO NEGADO: Identificação muito curta.");
+                return;
+            }
+
+            // SALVA OS DADOS NO NAVEGADOR (Local Storage)
+            localStorage.setItem('titan_user', name);
+            
+            // Se não tiver XP, começa do zero
+            if(!localStorage.getItem('titan_xp')) {
+                localStorage.setItem('titan_xp', '0');
+                localStorage.setItem('titan_level', '1');
+            }
+
+            // Efeito Sonoro de Sucesso (Simulado visualmente)
+            const btn = document.querySelector('button');
+            btn.innerText = "ACESSO PERMITIDO...";
+            btn.style.backgroundColor = "#39FF14"; // Verde Neon
+            
+            setTimeout(() => {
+                window.location.href = 'index.html'; // Manda para a vitrine
+            }, 1000);
+        }
+    </script>
+
+</body>
+</html>
